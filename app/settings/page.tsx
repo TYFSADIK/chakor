@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -19,6 +19,8 @@ type FitLevel = 'fits' | 'tight' | 'too_big' | 'unknown';
 type ModelFit = { level: FitLevel; neededGb: number; budgetGb: number; ceilingGb: number; maxFitCtx: number; onGpu: boolean; reason: string };
 type Hardware = { totalRamGb: number; availableRamGb: number; cpuName: string; cpuCores: number; hasGpu: boolean; gpuName: string | null; gpuVramGb: number | null; gpuCount: number; backend: string; unifiedMemory: boolean; gpuError: string | null };
 type Engine = { id: string; label: string; running: boolean; baseUrl: string; modelCount: number; detail: string; managed?: boolean; crashed?: boolean };
+type HfRepo = { id: string; downloads: number; likes: number; updatedAt: string | null };
+type HfFile = { path: string; size: number; label: string; quant: string | null; parts?: string[]; fit: ModelFit };
 type SystemStatus = { hardware: Hardware; hardwareSummary: string; engines: Engine[]; localModels?: (LocalModel & { fit: ModelFit })[]; recommended?: string | null };
 
 const FIT_STYLE: Record<FitLevel, { label: string; bg: string; bd: string; fg: string }> = {
@@ -110,6 +112,19 @@ export default function SettingsPage() {
   const [pulling, setPulling] = useState(false);
   const [pullStatus, setPullStatus] = useState('');
   const [pullPct, setPullPct] = useState<number | null>(null);
+
+  // Models: Hugging Face downloader (download a GGUF straight to the models dir)
+  const [hfQuery, setHfQuery] = useState('');
+  const [hfRepos, setHfRepos] = useState<HfRepo[]>([]);
+  const [hfSearching, setHfSearching] = useState(false);
+  const [hfSearched, setHfSearched] = useState(false);
+  const [hfOpenRepo, setHfOpenRepo] = useState<string | null>(null);
+  const [hfFiles, setHfFiles] = useState<HfFile[]>([]);
+  const [hfFilesLoading, setHfFilesLoading] = useState(false);
+  const [hfDownloading, setHfDownloading] = useState<string | null>(null); // "repo/file" key
+  const [hfStatus, setHfStatus] = useState('');
+  const [hfPct, setHfPct] = useState<number | null>(null);
+  const hfAbort = useRef<AbortController | null>(null);
 
   // Models: local llama.cpp manager
   const [local, setLocal] = useState<LocalStatus | null>(null);
@@ -270,6 +285,65 @@ export default function SettingsPage() {
     finally { setPulling(false); setPullStatus(''); setPullPct(null); }
   }
 
+  // ---- Hugging Face downloader -------------------------------------------
+  async function hfSearch() {
+    setHfSearching(true); setHfSearched(true); setHfOpenRepo(null); setHfFiles([]);
+    try {
+      const r = await fetch(`/api/models/hf/search?q=${encodeURIComponent(hfQuery.trim())}`);
+      const d = await r.json().catch(() => ({}));
+      setHfRepos(Array.isArray(d.repos) ? d.repos : []);
+    } catch { setHfRepos([]); }
+    finally { setHfSearching(false); }
+  }
+
+  async function hfOpenFiles(repo: string) {
+    if (hfOpenRepo === repo) { setHfOpenRepo(null); return; } // toggle closed
+    setHfOpenRepo(repo); setHfFiles([]); setHfFilesLoading(true);
+    try {
+      const r = await fetch(`/api/models/hf/files?repo=${encodeURIComponent(repo)}`);
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { notify(d.error ?? 'Could not read that repo', false); setHfOpenRepo(null); return; }
+      setHfFiles(Array.isArray(d.files) ? d.files : []);
+    } catch { notify('Network error', false); setHfOpenRepo(null); }
+    finally { setHfFilesLoading(false); }
+  }
+
+  // Download a GGUF to the models dir, streaming progress like the Ollama pull.
+  async function hfDownload(repo: string, file: string) {
+    if (hfDownloading) return;
+    setHfDownloading(`${repo}/${file}`); setHfStatus('Starting…'); setHfPct(null);
+    const ac = new AbortController(); hfAbort.current = ac;
+    try {
+      const r = await fetch('/api/models/hf/pull', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo, file }), signal: ac.signal });
+      if (!r.ok || !r.body) { const d = await r.json().catch(() => ({})); notify(d.error ?? 'Download failed', false); return; }
+      const reader = r.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '', failed = false;
+      outer: while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split('\n\n');
+        buf = parts.pop() ?? '';
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith('data:')) continue;
+          const data = line.slice(5).trim();
+          if (data === '[DONE]') break outer;
+          try {
+            const p = JSON.parse(data) as { status?: string; completed?: number; total?: number; error?: string; done?: boolean };
+            if (p.error) { notify(p.error, false); failed = true; break outer; }
+            if (p.status) setHfStatus(p.status);
+            if (typeof p.total === 'number' && p.total > 0 && typeof p.completed === 'number') setHfPct(Math.round((p.completed / p.total) * 100));
+          } catch { /* partial frame */ }
+        }
+      }
+      if (!failed) { notify('Model downloaded and ready'); await loadLocal(); loadSystem(); }
+    } catch (e) {
+      if (!(e instanceof DOMException && e.name === 'AbortError')) notify('Download failed', false);
+    } finally { setHfDownloading(null); setHfStatus(''); setHfPct(null); hfAbort.current = null; }
+  }
+
   async function loadLocal() {
     try {
       const r = await fetch('/api/models/local');
@@ -326,6 +400,7 @@ export default function SettingsPage() {
   // Fit verdict + recommendation come from /api/system, keyed by file path.
   const fitFor = (path: string): ModelFit | undefined => system?.localModels?.find(m => m.path === path)?.fit;
   const recommendedPath = system?.recommended ?? null;
+  const hfNum = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
 
   const TABS: { id: Tab; label: string }[] = [
     { id: 'profile', label: 'Profile' },
@@ -718,10 +793,84 @@ export default function SettingsPage() {
 
             <div style={{ height: 1, background: 'var(--bd)', margin: '30px 0' }} />
 
-            <SectionLabel>Pull a model</SectionLabel>
+            {/* Hugging Face downloader — get a GGUF for llama.cpp with no terminal */}
+            <SectionLabel>Download from Hugging Face</SectionLabel>
+            <p style={{ fontSize: 13, color: 'var(--fg-3)', lineHeight: 1.6, margin: '0 0 12px' }}>
+              Search Hugging Face for a GGUF model and download it straight into your models folder. It then appears under <strong style={{ color: 'var(--fg-2)' }}>Local model</strong> above, ready to run with llama.cpp. Each file is tagged for how well it fits your hardware, so you don&apos;t grab one that won&apos;t run.
+            </p>
+            <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+              <input value={hfQuery} onChange={e => setHfQuery(e.target.value)} placeholder="e.g. qwen3 4b, llama 3.2, gemma" className="inp" style={{ flex: 1 }} onKeyDown={e => e.key === 'Enter' && hfSearch()} />
+              <button onClick={hfSearch} disabled={hfSearching} className="btn btn-green" style={{ padding: '0 18px', fontSize: 13 }}>{hfSearching ? 'Searching…' : 'Search'}</button>
+            </div>
+
+            {hfSearched && !hfSearching && hfRepos.length === 0 && (
+              <p style={{ fontSize: 13, color: 'var(--fg-4)', padding: '6px 0 14px' }}>No GGUF repos found. Try a different search.</p>
+            )}
+
+            {hfRepos.length > 0 && (
+              <div style={{ border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', overflow: 'hidden', marginBottom: 8 }}>
+                {hfRepos.map(repo => {
+                  const open = hfOpenRepo === repo.id;
+                  return (
+                    <div key={repo.id} style={{ borderBottom: '1px solid var(--bd)' }}>
+                      <button onClick={() => hfOpenFiles(repo.id)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', background: open ? 'var(--bg-2)' : 'var(--bg-1)', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{repo.id}</p>
+                          <p style={{ fontSize: 11, color: 'var(--fg-4)', margin: '2px 0 0', fontFamily: 'JetBrains Mono, monospace' }}>↓ {hfNum(repo.downloads)} downloads · ♥ {hfNum(repo.likes)}</p>
+                        </div>
+                        <span style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .15s', color: 'var(--fg-4)', flexShrink: 0, fontSize: 11 }}>▾</span>
+                      </button>
+                      {open && (
+                        <div style={{ padding: '2px 10px 10px', background: 'var(--bg-2)' }}>
+                          {hfFilesLoading ? (
+                            <p style={{ fontSize: 12.5, color: 'var(--fg-4)', padding: '8px 6px' }}>Reading files…</p>
+                          ) : hfFiles.length === 0 ? (
+                            <p style={{ fontSize: 12.5, color: 'var(--fg-4)', padding: '8px 6px' }}>No downloadable GGUF files here.</p>
+                          ) : hfFiles.map(f => {
+                            const key = `${repo.id}/${f.path}`;
+                            const downloading = hfDownloading === key;
+                            return (
+                              <div key={f.path} style={{ padding: '8px 6px', borderTop: '1px solid var(--bd)' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <p style={{ fontSize: 12.5, color: 'var(--fg)', margin: 0, display: 'flex', alignItems: 'center', gap: 7 }}>
+                                      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{f.label}</span>
+                                      <FitBadge fit={f.fit} />
+                                    </p>
+                                    <p style={{ fontSize: 11, color: f.fit?.level === 'too_big' ? 'var(--err)' : 'var(--fg-4)', margin: '2px 0 0', fontFamily: 'JetBrains Mono, monospace' }}>{fmtSize(f.size)}{f.quant ? ` · ${f.quant}` : ''}{f.parts && f.parts.length > 1 ? ` · ${f.parts.length} parts` : ''}{f.fit && f.fit.level !== 'unknown' ? ` · ${f.fit.reason}` : ''}</p>
+                                  </div>
+                                  {downloading
+                                    ? <button onClick={() => hfAbort.current?.abort()} className="btn-ghost-sm" style={{ fontSize: 12, padding: '6px 12px', color: 'var(--err)', flexShrink: 0 }}>Cancel</button>
+                                    : <button disabled={!!hfDownloading} onClick={() => hfDownload(repo.id, f.path)} className="btn btn-outline" style={{ fontSize: 12, padding: '6px 14px', flexShrink: 0, opacity: hfDownloading ? 0.4 : 1 }} title={f.fit?.level === 'too_big' ? 'Likely too big for your machine' : undefined}>Download</button>}
+                                </div>
+                                {downloading && (
+                                  <div style={{ marginTop: 9 }}>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--fg-4)', marginBottom: 5, fontFamily: 'JetBrains Mono, monospace' }}>
+                                      <span>{hfStatus || 'Working…'}</span>{hfPct !== null && <span>{hfPct}%</span>}
+                                    </div>
+                                    <div style={{ height: 5, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden' }}>
+                                      <div style={{ height: '100%', width: `${hfPct ?? 8}%`, background: 'var(--g)', transition: 'width .3s', opacity: hfPct === null ? 0.5 : 1 }} />
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            <div style={{ height: 1, background: 'var(--bd)', margin: '30px 0' }} />
+
+            <SectionLabel>Pull a model from Ollama</SectionLabel>
             <p style={{ fontSize: 13, color: 'var(--fg-3)', lineHeight: 1.6, margin: '0 0 14px' }}>
-              Download a model from the Ollama library onto this server. Browse names at{' '}
+              If you run Ollama, download a model from its library onto this server. Browse names at{' '}
               <a href="https://ollama.com/library" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--g-text)' }}>ollama.com/library</a>.
+              {!ollamaReachable && <span style={{ color: 'var(--fg-4)' }}> Ollama isn&apos;t running right now — use Hugging Face above for llama.cpp instead.</span>}
             </p>
             <div style={{ display: 'flex', gap: 8 }}>
               <input value={pullName} onChange={e => setPullName(e.target.value)} placeholder="e.g. llama3.2 or qwen2.5:7b" className="inp" style={{ flex: 1 }} disabled={pulling} onKeyDown={e => e.key === 'Enter' && pullModel()} />
@@ -804,7 +953,7 @@ export default function SettingsPage() {
 
             <div style={{ padding: '16px 20px', background: 'var(--bg-1)', border: '1px solid var(--bd)', borderRadius: 'var(--r-md)' }}>
               <SectionLabel>About</SectionLabel>
-              {[['Version', '2.2.0'], ['Stack', 'Next.js · SQLite · llama.cpp'], ['Privacy', 'Self-hosted · no telemetry'], ['Inference', 'llama.cpp · Ollama · LM Studio · optional API keys']].map(([k, v]) => (
+              {[['Version', '2.3.0'], ['Stack', 'Next.js · SQLite · llama.cpp'], ['Privacy', 'Self-hosted · no telemetry'], ['Inference', 'llama.cpp · Ollama · LM Studio · optional API keys']].map(([k, v]) => (
                 <div key={k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                   <span style={{ fontSize: 12, color: 'var(--fg-4)', fontFamily: 'JetBrains Mono, monospace' }}>{k}</span>
                   <span style={{ fontSize: 12, color: k === 'Privacy' || k === 'Inference' ? 'var(--ok)' : 'var(--fg-2)', fontFamily: 'JetBrains Mono, monospace', fontWeight: k === 'Privacy' || k === 'Inference' ? 600 : 400 }}>{v}</span>

@@ -61,7 +61,8 @@ Chakor is built around that idea, and it tries to be genuinely nice to use while
 - ✓ Cloud models with your own keys: OpenAI, Anthropic, Google, OpenRouter
 - ✓ Switch model per message, and swap the local model or its context size from the web, no terminal
 - ✓ Hardware-aware: Chakor reads your RAM and GPU and tags each local model FITS, TIGHT, or TOO BIG, so you don't load one that crashes
-- ✓ If one local engine is down, the model menu offers the running ones as one-click switches
+- ✓ Download GGUF models from Hugging Face in the app, with a fit tag and a progress bar, straight into your models folder
+- ✓ Switch engines (llama.cpp, Ollama, LM Studio) from the model menu; if one is down, it points you at a running one
 - ✓ Load and unload local models and see their size and quant from the model picker
 
 **Knowledge and the web**
@@ -167,7 +168,7 @@ Chakor needs something to talk to. Easiest options, in order:
 
 2. **LM Studio.** Already use LM Studio? Open its **Developer** tab and **Start Server**. Chakor talks to it at `http://127.0.0.1:1234/v1` (override with `LMSTUDIO_BASE_URL`) and the models you have loaded there appear in the picker automatically, the same as Ollama.
 
-3. **llama.cpp.** Point `LLAMA_SERVER_BIN` at your `llama-server` and `LLAMA_GGUF` at a model, and Chakor runs it for you as part of the same service. From **Settings → Models** you then switch the model and context size from the web, no terminal. Drop more `.gguf` files in `~/Downloads`, `~/models`, or `~/.lmstudio` (or set `CHAKOR_MODELS_DIR`) and they show up to switch to. Already run your own `llama-server`? Set `LLAMA_BASE_URL` and `CHAKOR_SUPERVISE_LLAMA=false` and Chakor just uses it.
+3. **llama.cpp + download from Hugging Face.** Point `LLAMA_SERVER_BIN` at your `llama-server` and Chakor runs it for you as part of the same service. No model yet? In **Settings → Models → Download from Hugging Face**, search for one, see every quant with its size and a fit tag for your machine, and download it with a progress bar straight into your models folder, no terminal. Or drop `.gguf` files in `~/Downloads`, `~/models`, or `~/.lmstudio` (or set `CHAKOR_MODELS_DIR`) yourself. Already run your own `llama-server`? Set `LLAMA_BASE_URL` and `CHAKOR_SUPERVISE_LLAMA=false` and Chakor just uses it.
 
 4. **Cloud keys.** Paste a key into `.env.local` and that provider's models show up:
    `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_AI_API_KEY`.
@@ -181,7 +182,7 @@ Not sure what your machine can handle? **Settings → Models** shows your detect
 This is the part people usually have to fight a terminal for. In Chakor it is all in the UI.
 
 - **Per message.** Click the model name in the chat header and pick any model you have set up, local or cloud. Your choice sticks to that conversation.
-- **Switch when an engine is down.** The model menu shows which local engines (llama.cpp, Ollama, LM Studio) are running. If the one you are on crashed or isn't up, the menu offers the running ones as one-click switches, so you are never stuck on a dead backend.
+- **Switch engines from the menu.** The model menu has a row for llama.cpp, Ollama, and LM Studio with a live running light and model count. Tap one to move your whole stack to it. If the engine you are on crashed or isn't up, it points you at a running one, so you are never stuck on a dead backend.
 - **Swap the local model live.** Go to **Settings → Models**. Chakor lists every `.gguf` it found on your machine, each tagged with how well it fits your hardware. Click one and it loads, no editing config files, no restart in the terminal. The change is an in process restart of the bundled `llama-server`, so it just happens.
 - **Change the context size.** Same screen. It maps to a real `num_ctx` for Ollama, a server reload for the local model, and a history budget for cloud models, so the number means something everywhere.
 - **Vision turns on by itself** when the running local model supports images, and the attach button appears.
@@ -208,6 +209,7 @@ Everything lives in `.env.local`. The ones you will actually touch:
 | `LLAMA_SERVER_BIN`, `LLAMA_GGUF` | llama.cpp binary plus the default model Chakor runs for you. Switch both live in Settings → Models. |
 | `CHAKOR_MODELS_DIR`, `CHAKOR_SUPERVISE_LLAMA` | Extra folders to scan for `.gguf` files. Set supervise to `false` to run llama-server yourself. |
 | `CHAKOR_LLAMA_MAX_CRASHES` | How many fast crashes before Chakor stops relaunching a too-big model and tells you to pick a smaller one. Default 4. |
+| `HF_TOKEN` | Optional Hugging Face token for the in-app downloader. Lifts rate limits and reaches gated repos. Public models need none. |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_AI_API_KEY` | Turn on cloud models. |
 | `OPENROUTER_API_KEY`, `OPENROUTER_MODELS` | One key, many models. List them as `id\|Label`, comma separated. |
 | `SEARXNG_URL`, `BRAVE_SEARCH_API_KEY` | Web search backends. |

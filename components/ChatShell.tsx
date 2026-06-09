@@ -185,22 +185,34 @@ function ModelSelect({ models, selected, onChange, loadedNames, details, isAdmin
       </button>
       {open && (
         <div className="anim-scale-in" style={{position:'absolute',top:'calc(100% + 6px)',left:0,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:10,boxShadow:'var(--sh-lg)',minWidth:252,maxWidth:300,overflow:'hidden'}}>
-          {engineDown && (
-            <div style={{padding:'10px 12px',background:'rgba(251,191,36,.08)',borderBottom:'1px solid var(--bd-2)'}}>
-              <p style={{fontSize:11.5,color:'var(--fg-2)',margin:'0 0 7px',lineHeight:1.5}}>
-                <strong style={{color:'#f5b73d'}}>{ENGINE_LABEL[curEngine!.id]??curEngine!.id} isn&apos;t running.</strong> {curEngine!.crashed?'It kept crashing - the model is likely too big for this machine.':''}
-              </p>
-              {alts.length>0 ? (
-                <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
-                  {alts.map(e=>{ const mid=firstModelOf(e.id); if(!mid) return null; return (
-                    <button key={e.id} onClick={()=>{onChange(mid);setOpen(false);}}
-                      style={{fontSize:11.5,padding:'5px 10px',borderRadius:'var(--r)',border:'1px solid var(--g-bd)',background:'var(--g-dim)',color:'var(--g-text)',cursor:'pointer',fontFamily:'Inter,sans-serif'}}>
-                      Use {e.label} ({e.modelCount})
+          {engines.length>0 && (
+            <div style={{padding:'9px 11px 10px',borderBottom:'1px solid var(--bd-2)',background:'var(--bg-1)'}}>
+              <div style={{fontSize:9.5,fontWeight:600,color:'var(--fg-4)',textTransform:'uppercase',letterSpacing:'0.08em',fontFamily:'JetBrains Mono,monospace',marginBottom:7}}>Engine</div>
+              <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                {engines.map(e=>{
+                  const isCur=e.id===cur?.provider;
+                  const mid=firstModelOf(e.id);
+                  const canUse=e.running && e.modelCount>0 && !!mid && !isCur;
+                  return (
+                    <button key={e.id} disabled={!canUse} title={e.detail}
+                      onClick={()=>{ if(canUse&&mid){onChange(mid);setOpen(false);} }}
+                      style={{display:'flex',alignItems:'center',gap:6,fontSize:11.5,padding:'5px 9px',borderRadius:'var(--r)',fontFamily:'Inter,sans-serif',
+                        border:`1px solid ${isCur?'var(--g-bd)':'var(--bd-2)'}`,
+                        background:isCur?'var(--g-dim)':'transparent',
+                        color:isCur?'var(--g-text)':e.running?'var(--fg-2)':'var(--fg-4)',
+                        cursor:canUse?'pointer':'default',opacity:e.running?1:0.6}}>
+                      <span style={{width:6,height:6,borderRadius:'50%',flexShrink:0,background:e.running?'var(--g)':'var(--bd-2)'}}/>
+                      {e.label}
+                      {e.running && e.modelCount>0 && <span style={{fontFamily:'JetBrains Mono,monospace',fontSize:10,opacity:.7}}>{e.modelCount}</span>}
+                      {!e.running && <span style={{fontFamily:'JetBrains Mono,monospace',fontSize:10}}>off</span>}
                     </button>
-                  );})}
-                </div>
-              ) : (
-                <p style={{fontSize:11,color:'var(--fg-4)',margin:0}}>No other local engine is running. Start Ollama or LM Studio, or pick a cloud model.</p>
+                  );
+                })}
+              </div>
+              {engineDown && (
+                <p style={{fontSize:11,color:'var(--fg-4)',margin:'8px 0 0',lineHeight:1.5}}>
+                  {ENGINE_LABEL[curEngine!.id]??curEngine!.id} is offline{curEngine!.crashed?' (it kept crashing - model likely too big)':''}. {alts.length>0?'Tap a running engine above to switch.':'Start Ollama or LM Studio, or pick a cloud model.'}
+                </p>
               )}
             </div>
           )}

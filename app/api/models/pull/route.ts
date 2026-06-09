@@ -3,6 +3,10 @@ import { auth } from '@/lib/auth';
 import { OLLAMA_BASE_URL } from '@/lib/models';
 import type { Session } from 'next-auth';
 
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const maxDuration = 3600; // big pulls take a while; don't cut the stream
+
 function requireAdmin(session: Session | null) {
   if (!session?.user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   if (!(session.user as unknown as { isAdmin?: boolean }).isAdmin)
@@ -77,6 +81,14 @@ export async function POST(req: NextRequest) {
   });
 
   return new Response(stream, {
-    headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' },
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      // Without this, nginx and tunnels like cloudflared buffer the whole stream
+      // and the progress bar sits frozen until the pull finishes. This is the
+      // usual reason "Ollama pull doesn't work" — it was working, just invisible.
+      'X-Accel-Buffering': 'no',
+    },
   });
 }

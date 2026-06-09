@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.3
+
+Switch engines from the web, and get models without a terminal.
+
+Switch engines from the model menu
+- The model menu has an engine row: llama.cpp, Ollama, and LM Studio with a live
+  running light and a model count. Tap one to move your whole stack to it. Been
+  on llama.cpp and want LM Studio instead? One tap, no config files. If the
+  engine you are on goes down, it points you at a running one.
+
+Download models from Hugging Face
+- Search Hugging Face for a GGUF right inside the app, see every quant with its
+  size and a FITS / TIGHT / TOO BIG tag for your machine, click Download, and
+  watch the progress bar. The file lands in your models folder, ready to run with
+  llama.cpp. Sharded models and vision projectors are handled for you.
+- Pulling from Ollama works again behind a reverse proxy or Cloudflare tunnel.
+  The progress was being buffered and looked frozen; the stream is flushed
+  straight through now.
+
 ## 2.2
 
 Runs on whatever hardware you have, and never gets you stuck on a dead engine.

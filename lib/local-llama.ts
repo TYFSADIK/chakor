@@ -78,6 +78,16 @@ function modelDirs(currentModelPath: string | null): string[] {
   return [...dirs];
 }
 
+/**
+ * Where freshly downloaded models are saved. First CHAKOR_MODELS_DIR entry if
+ * set, otherwise ~/models. This is one of the dirs scanLocalModels() already
+ * scans, so anything downloaded here shows up to switch to right away.
+ */
+export function primaryModelsDir(): string {
+  const configured = (process.env.CHAKOR_MODELS_DIR ?? '').split(path.delimiter).map((d) => d.trim()).filter(Boolean);
+  return configured[0] ?? path.join(os.homedir(), 'models');
+}
+
 async function ggufFilesIn(dir: string, depth: number): Promise<string[]> {
   let entries;
   try {
