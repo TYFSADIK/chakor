@@ -1,0 +1,165 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="800" viewBox="0 0 1280 800" fill="none" role="img" aria-label="Chakor app preview">
+  <defs>
+    <linearGradient id="green" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#34d36b"/>
+      <stop offset="1" stop-color="#16a34a"/>
+    </linearGradient>
+    <linearGradient id="page" x1="0" y1="0" x2="0" y2="800" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#070b09"/>
+      <stop offset="1" stop-color="#0a100d"/>
+    </linearGradient>
+    <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="20" stdDeviation="30" flood-color="#000000" flood-opacity="0.5"/>
+    </filter>
+    <g id="fist" fill="url(#green)">
+      <rect x="14" y="33" width="20" height="11" rx="4.5"/>
+      <rect x="10.5" y="17" width="27" height="18" rx="6"/>
+      <rect x="11" y="10" width="5.6" height="12" rx="2.8"/>
+      <rect x="17.8" y="8.5" width="5.6" height="13.5" rx="2.8"/>
+      <rect x="24.6" y="8.5" width="5.6" height="13.5" rx="2.8"/>
+      <rect x="31.4" y="10" width="5.6" height="12" rx="2.8"/>
+      <rect x="8" y="22" width="15" height="7.5" rx="3.75" transform="rotate(-18 15 26)"/>
+    </g>
+  </defs>
+
+  <rect width="1280" height="800" fill="url(#page)"/>
+
+  <!-- app window -->
+  <g filter="url(#soft)">
+    <rect x="20" y="20" width="1240" height="760" rx="20" fill="#0b110e" stroke="#1b2a23" stroke-width="1.5"/>
+  </g>
+
+  <!-- ===== SIDEBAR ===== -->
+  <rect x="21" y="21" width="280" height="758" rx="20" fill="#0d1410"/>
+  <rect x="281" y="21" width="20" height="758" fill="#0d1410"/>
+  <line x1="301" y1="21" x2="301" y2="779" stroke="#1b2a23"/>
+
+  <use href="#fist" transform="translate(44,46) scale(0.64)"/>
+  <text x="92" y="78" font-family="'Segoe UI', system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif" font-size="23" font-weight="800" fill="#f1f5f4">Chakor</text>
+
+  <!-- new chat -->
+  <rect x="40" y="104" width="222" height="44" rx="12" fill="url(#green)"/>
+  <path d="M62 126 h18 M71 117 v18" stroke="#06210f" stroke-width="2.4" stroke-linecap="round"/>
+  <text x="92" y="131" font-family="'Segoe UI', system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="700" fill="#06210f">New chat</text>
+
+  <!-- search box -->
+  <rect x="40" y="162" width="222" height="38" rx="10" fill="#111b16" stroke="#243a30"/>
+  <circle cx="62" cy="181" r="6" fill="none" stroke="#5b7a6b" stroke-width="2"/>
+  <line x1="66" y1="185" x2="71" y2="190" stroke="#5b7a6b" stroke-width="2" stroke-linecap="round"/>
+  <rect x="80" y="178" width="96" height="6" rx="3" fill="#2c463a"/>
+
+  <text x="40" y="234" font-family="'Segoe UI', system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif" font-size="11" letter-spacing="2" font-weight="700" fill="#5b7a6b">CONVERSATIONS</text>
+
+  <!-- active conversation -->
+  <rect x="32" y="246" width="238" height="38" rx="10" fill="#16271e"/>
+  <rect x="48" y="262" width="150" height="7" rx="3.5" fill="#d2e2da"/>
+  <path d="M250 256 l0 12 M246 260 a4 4 0 0 1 8 0 l0 4 -8 0 z" fill="#22c55e" opacity="0.9"/>
+  <!-- conversation -->
+  <rect x="48" y="300" width="172" height="7" rx="3.5" fill="#5b7a6b"/>
+  <!-- folder -->
+  <path d="M44 332 h10 l3 4 h13 a2 2 0 0 1 2 2 v12 a2 2 0 0 1 -2 2 h-26 a2 2 0 0 1 -2 -2 v-16 a2 2 0 0 1 2 -2 z" fill="#1c2e25" stroke="#2f5142"/>
+  <text x="80" y="350" font-family="'Segoe UI', system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#9fb6ab">Work</text>
+  <path d="M256 343 l5 5 l5 -5" stroke="#5b7a6b" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <rect x="72" y="384" width="148" height="7" rx="3.5" fill="#5b7a6b"/>
+  <rect x="72" y="416" width="120" height="7" rx="3.5" fill="#5b7a6b"/>
+
+  <line x1="40" y1="456" x2="262" y2="456" stroke="#1b2a23"/>
+
+  <!-- nav links -->
+  <g font-family="'Segoe UI', system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif" font-size="15" font-weight="600">
+    <!-- compare -->
+    <rect x="32" y="472" width="238" height="40" rx="10" fill="#13201a"/>
+    <rect x="50" y="484" width="6" height="16" rx="2" fill="#22c55e"/>
+    <rect x="60" y="488" width="6" height="12" rx="2" fill="#22c55e"/>
+    <text x="80" y="497" fill="#e2ebe6">Compare</text>
+    <!-- notes -->
+    <rect x="48" y="524" width="18" height="20" rx="3" fill="none" stroke="#5b7a6b" stroke-width="2"/>
+    <line x1="52" y1="530" x2="62" y2="530" stroke="#5b7a6b" stroke-width="2" stroke-linecap="round"/>
+    <line x1="52" y1="535" x2="62" y2="535" stroke="#5b7a6b" stroke-width="2" stroke-linecap="round"/>
+    <text x="80" y="540" fill="#9fb6ab">Notes</text>
+    <!-- memory -->
+    <path d="M57 568 a9 9 0 1 0 0.1 0 z" fill="none" stroke="#5b7a6b" stroke-width="2"/>
+    <circle cx="57" cy="577" r="3" fill="#5b7a6b"/>
+    <text x="80" y="583" fill="#9fb6ab">Memory</text>
+    <!-- settings -->
+    <circle cx="57" cy="620" r="6" fill="none" stroke="#5b7a6b" stroke-width="2"/>
+    <circle cx="57" cy="620" r="2" fill="#5b7a6b"/>
+    <text x="80" y="626" fill="#9fb6ab">Settings</text>
+  </g>
+
+  <!-- user chip -->
+  <line x1="40" y1="712" x2="262" y2="712" stroke="#1b2a23"/>
+  <circle cx="56" cy="744" r="15" fill="url(#green)"/>
+  <text x="50" y="749" font-family="'Segoe UI', system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif" font-size="14" font-weight="800" fill="#06210f">T</text>
+  <rect x="82" y="734" width="80" height="7" rx="3.5" fill="#9fb6ab"/>
+  <rect x="82" y="747" width="46" height="16" rx="8" fill="#14271f"/>
+  <text x="92" y="759" font-family="'Segoe UI', system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif" font-size="10" font-weight="700" fill="#22c55e">admin</text>
+
+  <!-- ===== MAIN ===== -->
+  <!-- top bar -->
+  <rect x="330" y="40" width="158" height="36" rx="11" fill="#111b16" stroke="#243a30"/>
+  <circle cx="350" cy="58" r="4.5" fill="#22c55e"/>
+  <text x="364" y="63" font-family="'Segoe UI', system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#dbe7e1">llama3.2</text>
+  <path d="M468 55 l5 5 l5 -5" stroke="#5b7a6b" stroke-width="2" fill="none" stroke-linecap="round"/>
+
+  <rect x="500" y="40" width="104" height="36" rx="11" fill="#111b16" stroke="#243a30"/>
+  <text x="518" y="63" font-family="'Segoe UI', system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#9fb6ab">8K ctx</text>
+
+  <!-- search toggle on -->
+  <rect x="1016" y="40" width="118" height="36" rx="18" fill="#13301f" stroke="#1f7a47"/>
+  <circle cx="1116" cy="58" r="12" fill="#22c55e"/>
+  <text x="1034" y="63" font-family="'Segoe UI', system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif" font-size="14" font-weight="600" fill="#bff0d0">Search</text>
+  <!-- theme + share -->
+  <circle cx="1166" cy="58" r="15" fill="#111b16" stroke="#243a30"/>
+  <circle cx="1166" cy="58" r="6" fill="url(#green)"/>
+  <rect x="1196" y="43" width="50" height="30" rx="9" fill="#111b16" stroke="#243a30"/>
+  <circle cx="1210" cy="53" r="3" fill="#9fb6ab"/>
+  <circle cx="1210" cy="63" r="3" fill="#9fb6ab"/>
+  <circle cx="1232" cy="58" r="3" fill="#9fb6ab"/>
+  <line x1="1212" y1="54" x2="1230" y2="58" stroke="#9fb6ab" stroke-width="1.6"/>
+  <line x1="1212" y1="62" x2="1230" y2="58" stroke="#9fb6ab" stroke-width="1.6"/>
+
+  <line x1="330" y1="98" x2="1238" y2="98" stroke="#141f1a"/>
+
+  <!-- assistant message 1 -->
+  <use href="#fist" transform="translate(326,126) scale(0.5)"/>
+  <rect x="372" y="124" width="566" height="92" rx="16" fill="#121d18"/>
+  <rect x="392" y="144" width="496" height="8" rx="4" fill="#46665a"/>
+  <rect x="392" y="162" width="524" height="8" rx="4" fill="#46665a"/>
+  <rect x="392" y="180" width="300" height="8" rx="4" fill="#3a554a"/>
+  <!-- tool-use chip -->
+  <rect x="372" y="228" width="186" height="28" rx="14" fill="#10231b" stroke="#1f7a47" stroke-opacity="0.6"/>
+  <circle cx="392" cy="242" r="5" fill="none" stroke="#22c55e" stroke-width="2"/>
+  <line x1="396" y1="246" x2="400" y2="250" stroke="#22c55e" stroke-width="2" stroke-linecap="round"/>
+  <text x="408" y="247" font-family="'Segoe UI', system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif" font-size="13" font-weight="600" fill="#9fe6b8">web search · 4 sources</text>
+
+  <!-- user message -->
+  <rect x="760" y="284" width="478" height="72" rx="16" fill="url(#green)"/>
+  <rect x="784" y="306" width="396" height="8" rx="4" fill="#eafff1" opacity="0.95"/>
+  <rect x="784" y="324" width="300" height="8" rx="4" fill="#eafff1" opacity="0.7"/>
+
+  <!-- assistant message 2 with code -->
+  <use href="#fist" transform="translate(326,390) scale(0.5)"/>
+  <rect x="372" y="384" width="640" height="178" rx="16" fill="#121d18"/>
+  <rect x="392" y="406" width="430" height="8" rx="4" fill="#46665a"/>
+  <!-- code block -->
+  <rect x="392" y="430" width="600" height="112" rx="10" fill="#0a120e" stroke="#1e3228"/>
+  <rect x="408" y="448" width="60" height="7" rx="3.5" fill="#c084fc"/>
+  <rect x="474" y="448" width="120" height="7" rx="3.5" fill="#67b8ff"/>
+  <rect x="408" y="468" width="40" height="7" rx="3.5" fill="#9fb6ab"/>
+  <rect x="454" y="468" width="150" height="7" rx="3.5" fill="#fbbf77"/>
+  <rect x="424" y="488" width="180" height="7" rx="3.5" fill="#7fd99b"/>
+  <rect x="424" y="508" width="120" height="7" rx="3.5" fill="#9fb6ab"/>
+  <rect x="408" y="528" width="44" height="7" rx="3.5" fill="#c084fc"/>
+
+  <!-- input bar -->
+  <rect x="330" y="708" width="908" height="52" rx="16" fill="#0d1712" stroke="#274a3a"/>
+  <!-- attach (vision) -->
+  <path d="M356 728 a8 8 0 0 0 -16 0 v10 a5 5 0 0 0 10 0 v-9" fill="none" stroke="#7d9a8d" stroke-width="2" stroke-linecap="round"/>
+  <!-- search glyph -->
+  <circle cx="384" cy="732" r="6" fill="none" stroke="#7d9a8d" stroke-width="2"/>
+  <line x1="388" y1="736" x2="393" y2="741" stroke="#7d9a8d" stroke-width="2" stroke-linecap="round"/>
+  <rect x="414" y="730" width="220" height="7" rx="3.5" fill="#2c463a"/>
+  <circle cx="1212" cy="734" r="18" fill="url(#green)"/>
+  <path d="M1204 734 h14 M1212 727 l8 7 l-8 7" stroke="#06210f" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>
