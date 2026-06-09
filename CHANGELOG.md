@@ -1,5 +1,30 @@
 # Changelog
 
+## 2.4.1
+
+A real installer, so the public can run one command and walk away.
+
+Hands-off install
+- `bash install.sh` now installs everything Chakor needs, not just Node. It works
+  out your OS and package manager (apt, dnf, yum, pacman, zypper, apk, Homebrew,
+  Termux) and pulls in Git, a C/C++ build chain, Python, OpenSSL, Node 20+, and
+  Ollama so you can run local models with no compiling.
+- It asks for your password at most once and keeps that grant alive in the
+  background, so it runs start to finish without stopping to ask again. On a box
+  where you are already root (a typical VPS or container) there is no prompt at
+  all. It never writes permanent passwordless-sudo rules.
+- Optional extras behind a flag: `--all` or `--with-llama-cpp` builds a local
+  llama-server from source, with NVIDIA CUDA when the toolkit is present (a CPU
+  build otherwise, plus the one command to add GPU later).
+- `--service` writes a systemd unit and starts Chakor 24/7, running it as a
+  normal user rather than root. Also `--minimal`, `--no-ollama`, `--yes` for
+  unattended servers, `--no-start`, and `--dry-run` to preview the plan.
+- Resilient by design: optional steps that fail are skipped with a note instead
+  of killing the install, network steps retry, and the whole run is logged to
+  `install.log`. Re-running is safe and picks up where it can.
+- Windows `install.ps1` matches: installs Git, Node 20+, and Ollama via winget
+  (Chocolatey fallback), with the same skip-and-continue behavior.
+
 ## 2.4
 
 Downloads that don't quit on you, and never two models fighting for memory.

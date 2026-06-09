@@ -159,11 +159,17 @@ docker compose exec ollama ollama pull llama3.2
 
 ### Option 2: One command installer (Linux, macOS, Android)
 
-No Node installed? These scripts handle that for you, then set everything up and start it.
+The hands-off path. The installer works out your OS and package manager, then installs everything Chakor needs and starts it: Git, a C/C++ build chain, Node 20+, and Ollama so you can run local models right away. It asks for your password at most once and keeps that grant alive, so it runs start to finish without stopping to ask again. On a box where you are already root (a typical VPS or container) there is no prompt at all.
 
 ```bash
 git clone https://github.com/TYFSADIK/chakor.git && cd chakor
 bash install.sh
+```
+
+Want the works, including a local llama.cpp build with NVIDIA CUDA when your machine has it:
+
+```bash
+bash install.sh --all
 ```
 
 On **Windows**, open PowerShell in the folder and run:
@@ -173,6 +179,28 @@ powershell -ExecutionPolicy Bypass -File install.ps1
 ```
 
 On **Android**, install [Termux](https://termux.dev), then run the same `bash install.sh`. It uses Termux packages automatically, and your phone becomes the server.
+
+**Installer options**
+
+| Flag | What it does |
+| --- | --- |
+| `--all` | Everything: core tools, Ollama, and build llama.cpp (CUDA auto-detected). |
+| `--with-llama-cpp` | Also build a local `llama-server` from source. |
+| `--with-cuda` | Build llama.cpp with NVIDIA CUDA (implies `--with-llama-cpp`). |
+| `--service` | Install and start a systemd service so it runs 24/7 (needs root or sudo). |
+| `--no-ollama` | Skip Ollama. Bring your own engine or a cloud key. |
+| `--minimal` | Just Node and the app. |
+| `--yes` | Non-interactive, for unattended setups like a fresh server. |
+| `--no-start` | Set everything up but do not start. |
+| `--dry-run` | Print the plan and change nothing. |
+
+Fresh server, fully unattended:
+
+```bash
+sudo bash install.sh --yes --service
+```
+
+A few honest notes. The installer never writes permanent passwordless-sudo rules and never runs the app itself as root, so a server that faces the network is not one bug away from owning the whole machine. CUDA is large and version-sensitive, so it is used when the toolkit is already there and otherwise pointed to, not force-installed onto your drivers. LM Studio is a desktop app with no headless installer, so grab it yourself if you want it; Chakor finds it the moment its local server is running.
 
 ### Option 3: Manual (for developers)
 
@@ -295,7 +323,13 @@ Next.js app
 
 ## Running it 24/7
 
-There is a systemd unit at `scripts/chakor.service`. Edit the paths inside, then:
+Easiest: let the installer set up the service for you. It writes a systemd unit pointed at the right folder, runs the app as a normal user (not root), and starts it on boot, restarting on crash.
+
+```bash
+bash install.sh --service
+```
+
+Prefer to do it by hand? There is a unit at `scripts/chakor.service`. Edit the paths inside, then:
 
 ```bash
 sudo cp scripts/chakor.service /etc/systemd/system/
@@ -321,6 +355,7 @@ Already had the old two service setup (a separate llama server)? Run `scripts/us
 
 | Problem | Fix |
 | --- | --- |
+| Installer stopped partway | Just run `bash install.sh` again. It is safe to re-run and skips what is already done. The full log is in `install.log`. |
 | `npm install` fails on peer deps | Use `npm install --legacy-peer-deps`. |
 | Chat says it cannot connect | Is Ollama, LM Studio, or llama.cpp running, or did you set a cloud key. The model menu and Settings → Models both show which engines are up. |
 | Local model keeps crashing | It is probably too big for your machine. Settings → Models marks it TOO BIG and suggests one that fits, or switch to Ollama or LM Studio from the model menu. |
