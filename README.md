@@ -39,20 +39,43 @@ Think of it as a lighter, friendlier alternative to Open WebUI, and an open sour
 
 </div>
 
-<!--
-  Want real screenshots in here instead of the illustration above?
-  Run the app, grab a few PNGs, drop them in docs/, and swap the <img src> lines.
-  A short screen recording exported as docs/demo.gif at the very top is the single
-  biggest thing you can add to make this page pop. See docs/README.md for tips.
--->
+<!-- The images above are generated from code in docs/build-assets.mjs so they stay
+     on-brand and easy to regenerate. The one thing that beats them is a real 10-second
+     screen recording saved as docs/demo.gif at the very top. See docs/README.md. -->
 
 ## Why this exists
 
-Every big AI app wants the same deal. You hand over your questions, your documents, your half formed ideas at 2am, and they keep all of it on servers you will never see. That is the price of "free."
+Every big AI app wants the same deal. You hand over your questions, your documents, your half formed ideas at 2am, and they keep all of it on servers you will never see, to train on, to profile, to sell around. That is the price of "free."
 
-Self hosting flips that. You run the model. You hold the data. Nobody gets to mine your chats to sell you something later. Privacy is not a setting you toggle, it is where the software runs.
+Self hosting flips that. You run the model. You hold the data. No account to harvest, no telemetry phoning home, no data broker in the middle, no government letter they can answer with your chat history because they never had it.
 
-Chakor is built around that idea, and it tries to be genuinely nice to use while doing it.
+> **Privacy is not a setting you toggle. It is where the software runs.**
+
+Chakor runs on your machine, talks to nobody you did not ask it to, and still tries to be genuinely nice to use. That is the whole pitch.
+
+## Built different
+
+Three things you will not find stitched together anywhere else.
+
+### It knows what your machine can run
+
+Most apps let you download a model, load it, and find out it was too big when it crashes. Chakor reads your RAM and GPU first and tags every model **FITS**, **TIGHT**, or **TOO BIG**, then points you at the best one that actually runs. A 4 GB laptop and a 24 GB workstation each get an honest answer, not a crash.
+
+<div align="center">
+<img src="docs/fit.png" alt="Settings showing detected hardware, live engine status, and each local model tagged FITS, TIGHT, or TOO BIG with a recommended pick" width="94%"/>
+</div>
+
+### Get models without touching a terminal
+
+Search Hugging Face from inside the app, see every quant with its size and a fit tag, and click once. It downloads in the background, straight into your models folder, ready for llama.cpp. Close the tab and it keeps going.
+
+<div align="center">
+<img src="docs/download.png" alt="In-app Hugging Face browser with quants tagged by fit, and a downloads tray showing live progress, speed, and time remaining" width="94%"/>
+</div>
+
+### Switch engines without the crashes
+
+Flip between llama.cpp, Ollama, and LM Studio in one tap. Chakor unloads the previous model first, so two models never fight for the same VRAM. On a roomy GPU, turn that off and keep several loaded for instant switching.
 
 ## Everything it does
 
@@ -60,9 +83,9 @@ Chakor is built around that idea, and it tries to be genuinely nice to use while
 - ✓ Local models through Ollama, LM Studio, or llama.cpp, on GPU or plain CPU
 - ✓ Cloud models with your own keys: OpenAI, Anthropic, Google, OpenRouter
 - ✓ Switch model per message, and swap the local model or its context size from the web, no terminal
-- ✓ Hardware-aware: Chakor reads your RAM and GPU and tags each local model FITS, TIGHT, or TOO BIG, so you don't load one that crashes
-- ✓ Download GGUF models from Hugging Face in the app, with a fit tag and a progress bar, straight into your models folder
-- ✓ Switch engines (llama.cpp, Ollama, LM Studio) from the model menu; if one is down, it points you at a running one
+- ✓ Hardware-aware: Chakor reads your RAM and GPU and tags each local model FITS, TIGHT, or TOO BIG, so you never load one that crashes
+- ✓ Download GGUF models from Hugging Face in the app, on a background job with progress and speed you can watch from anywhere
+- ✓ Switch engines (llama.cpp, Ollama, LM Studio) from the model menu; it frees the old one first so a modest GPU never OOMs, and points you at a running engine if one is down
 - ✓ Load and unload local models and see their size and quant from the model picker
 
 **Knowledge and the web**
@@ -97,6 +120,11 @@ Both Open WebUI and LM Studio are good. Here is where Chakor is different.
 | Self host on a server | ✓ | ✓ | desktop only |
 | Run the server on a phone | ✓ Termux | partial | ✗ |
 | Local models (Ollama / llama.cpp) | ✓ | ✓ | ✓ |
+| One UI for llama.cpp + Ollama + LM Studio | ✓ | partial | ✗ |
+| Knows your hardware, fit tag per model | ✓ | ✗ | partial |
+| Download GGUF from Hugging Face in-app | ✓ | ✗ | ✓ |
+| Background downloads you can walk away from | ✓ | ✗ | ✓ |
+| Frees the old model so you don't OOM on switch | ✓ | ✗ | n/a |
 | Bring your own cloud keys | ✓ | ✓ | limited |
 | Swap local model + context from the UI | ✓ | partial | ✓ |
 | Web search built in | ✓ | ✓ | ✗ |
@@ -310,11 +338,23 @@ If Chakor is useful to you, **star the repo**. It is the single easiest way to h
 
 MIT. Do what you want with it. See [LICENSE](LICENSE).
 
+<br/>
+
 <div align="center">
+
+### Your AI should answer to you, not to a data broker.
+
+Run it on your laptop. Run it on a server. Run it on your old phone in a drawer. Keep every word.
+
+<a href="#quick-start"><img src="https://img.shields.io/badge/Get%20started-one%20command-22c55e?style=for-the-badge&labelColor=0b110e" alt="Get started"/></a>
+&nbsp;
+<a href="https://github.com/TYFSADIK/chakor"><img src="https://img.shields.io/badge/Star%20on%20GitHub-help%20it%20spread-0b110e?style=for-the-badge&labelColor=0b110e&color=334155&logo=github" alt="Star on GitHub"/></a>
+
+<br/>
 <br/>
 
 **Built for people who would rather run their own tools.**
 
-<sub><a href="#top">back to top</a></sub>
+<sub>No cloud · No tracking · No big tech · <a href="#top">back to top</a></sub>
 
 </div>
