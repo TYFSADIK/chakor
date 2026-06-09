@@ -1,6 +1,11 @@
-export type ModelProvider = 'llama' | 'ollama' | 'openai' | 'anthropic' | 'google' | 'openrouter';
+export type ModelProvider = 'llama' | 'ollama' | 'lmstudio' | 'openai' | 'anthropic' | 'google' | 'openrouter';
 
 export const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434';
+
+// LM Studio runs an OpenAI-compatible server (default port 1234). Point Chakor at
+// it and whatever models you have loaded there show up automatically, the same
+// way Ollama models do. This is the "I already use LM Studio" path.
+export const LMSTUDIO_BASE_URL = (process.env.LMSTUDIO_BASE_URL ?? 'http://127.0.0.1:1234/v1').replace(/\/+$/, '');
 
 export interface ModelConfig {
   id: string;
@@ -100,10 +105,15 @@ export function defaultModel(): ModelConfig {
 }
 
 export function getModel(id: string): ModelConfig | undefined {
-  // Ollama models are discovered at runtime, so synthesize their config from the id.
+  // Ollama + LM Studio models are discovered at runtime, so synthesize their
+  // config from the id prefix instead of looking them up in the static list.
   if (id.startsWith('ollama:')) {
     const name = id.slice('ollama:'.length);
     return { id, name, provider: 'ollama', contextWindow: 0, vision: isVisionModel(name) };
+  }
+  if (id.startsWith('lmstudio:')) {
+    const name = id.slice('lmstudio:'.length);
+    return { id, name, provider: 'lmstudio', contextWindow: 0, vision: isVisionModel(name) };
   }
   return getAvailableModels().find((m) => m.id === id);
 }
@@ -125,6 +135,27 @@ export async function discoverOllamaModels(): Promise<ModelConfig[]> {
       .map((m) => m.name)
       .filter((n): n is string => Boolean(n))
       .map((name) => ({ id: `ollama:${name}`, name, provider: 'ollama' as const, contextWindow: 0, vision: isVisionModel(name) }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Ask LM Studio which models it has loaded. Same idea as discoverOllamaModels:
+ * returns [] fast if LM Studio's server isn't running. LM Studio exposes the
+ * OpenAI-compatible /v1/models endpoint, so one GET lists everything available.
+ */
+export async function discoverLmStudioModels(): Promise<ModelConfig[]> {
+  try {
+    const res = await fetch(`${LMSTUDIO_BASE_URL}/models`, { signal: AbortSignal.timeout(1500) });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return ((data.data ?? []) as Array<{ id?: string }>)
+      .map((m) => m.id)
+      .filter((id): id is string => Boolean(id))
+      // LM Studio lists embedding models too; they can't chat, so drop them.
+      .filter((id) => !/embed/i.test(id))
+      .map((id) => ({ id: `lmstudio:${id}`, name: id, provider: 'lmstudio' as const, contextWindow: 0, vision: isVisionModel(id) }));
   } catch {
     return [];
   }

@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.2
+
+Runs on whatever hardware you have, and never gets you stuck on a dead engine.
+
+Hardware-aware models
+- Chakor detects your RAM, CPU, and GPU (VRAM), and tells you in Settings →
+  Models exactly what your machine can run. Each local model file is tagged
+  FITS, TIGHT, or TOO BIG against your hardware, with a RECOMMENDED pick, so a
+  4 GB laptop stops loading a model that was only ever going to crash.
+- llama.cpp no longer crash-loops forever. If a model is too big and the server
+  keeps dying on launch, Chakor stops after a few tries and says so in plain
+  language, instead of pinning your CPU retrying the impossible.
+
+LM Studio, and switching when one engine is down
+- LM Studio is now a first-class backend. Start its local server and the models
+  you have loaded there show up automatically, the same as Ollama.
+- The model menu shows which local engines (llama.cpp, Ollama, LM Studio) are
+  actually running. If the one you picked is down, it offers the running ones as
+  one-click switches right there, so "llama.cpp crashed, now what" has an answer
+  that isn't the terminal.
+
 ## 2.1
 
 Everything controllable from the web, and one service instead of two.

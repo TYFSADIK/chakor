@@ -149,6 +149,31 @@ export async function* streamOllama(
   yield* readOpenAISSE(res, onStats);
 }
 
+export async function* streamLmStudio(
+  messages: ChatMessage[],
+  modelId: string,
+  signal?: AbortSignal,
+  onStats?: StatsCb,
+): AsyncGenerator<string> {
+  // LM Studio speaks the OpenAI dialect, so this is the same shape as OpenAI/
+  // Ollama. The context window is fixed when the model is loaded inside LM Studio
+  // (there's no per-request num_ctx knob like Ollama), so we don't send one.
+  const { LMSTUDIO_BASE_URL } = await import('./models');
+  const res = await fetch(`${LMSTUDIO_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: modelId, messages, stream: true, stream_options: { include_usage: true } }),
+    signal,
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`LM Studio ${res.status}: ${text.slice(0, 300)}`);
+  }
+
+  yield* readOpenAISSE(res, onStats);
+}
+
 export async function* streamOpenRouter(
   messages: ChatMessage[],
   modelId: string,

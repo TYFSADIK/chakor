@@ -1,6 +1,6 @@
 import type { ChatMessage, LlamaStats } from './llama';
 import { streamChat } from './llama';
-import { streamOpenAI, streamAnthropic, streamGoogle, streamOpenRouter, streamOllama } from './providers';
+import { streamOpenAI, streamAnthropic, streamGoogle, streamOpenRouter, streamOllama, streamLmStudio } from './providers';
 import { getModel, llamaEndpoint, defaultModel } from './models';
 
 export interface DispatchOptions {
@@ -76,6 +76,8 @@ export function streamForModel(opts: DispatchOptions): AsyncGenerator<string> {
       return streamOpenRouter(messages, model.id, signal, onStats);
     case 'ollama':
       return streamOllama(messages, model.id.replace(/^ollama:/, ''), signal, onStats, contextSize);
+    case 'lmstudio':
+      return streamLmStudio(messages, model.id.replace(/^lmstudio:/, ''), signal, onStats);
     default:
       return streamChat({
         model: llamaEndpoint(),

@@ -13,7 +13,30 @@ type ApiKey = { id: number; name: string; masked: string; created_at: number; la
 type Installed = { name: string; size: number; modified_at: string | null };
 type LocalModel = { path: string; name: string; size: number; vision: boolean };
 type LocalLive = { online: boolean; modelName: string | null; nCtx: number | null; vision?: boolean; modelPath?: string | null };
-type LocalStatus = { live: LocalLive; available?: LocalModel[]; managed?: boolean; mode?: string; supervisor?: { running: boolean; lastError: string | null; restarts: number }; runtime?: { model?: string; ctx?: number }; isAdmin?: boolean };
+type LocalStatus = { live: LocalLive; available?: LocalModel[]; managed?: boolean; mode?: string; supervisor?: { running: boolean; lastError: string | null; restarts: number; crashed?: boolean }; runtime?: { model?: string; ctx?: number }; isAdmin?: boolean };
+
+type FitLevel = 'fits' | 'tight' | 'too_big' | 'unknown';
+type ModelFit = { level: FitLevel; neededGb: number; budgetGb: number; ceilingGb: number; maxFitCtx: number; onGpu: boolean; reason: string };
+type Hardware = { totalRamGb: number; availableRamGb: number; cpuName: string; cpuCores: number; hasGpu: boolean; gpuName: string | null; gpuVramGb: number | null; gpuCount: number; backend: string; unifiedMemory: boolean; gpuError: string | null };
+type Engine = { id: string; label: string; running: boolean; baseUrl: string; modelCount: number; detail: string; managed?: boolean; crashed?: boolean };
+type SystemStatus = { hardware: Hardware; hardwareSummary: string; engines: Engine[]; localModels?: (LocalModel & { fit: ModelFit })[]; recommended?: string | null };
+
+const FIT_STYLE: Record<FitLevel, { label: string; bg: string; bd: string; fg: string }> = {
+  fits:    { label: 'FITS',    bg: 'var(--g-dim)',          bd: 'var(--g-bd)',            fg: 'var(--g-text)' },
+  tight:   { label: 'TIGHT',   bg: 'rgba(251,191,36,.1)',   bd: 'rgba(251,191,36,.35)',   fg: '#e0a32e' },
+  too_big: { label: 'TOO BIG', bg: 'rgba(248,113,113,.1)',  bd: 'rgba(248,113,113,.35)',  fg: 'var(--err)' },
+  unknown: { label: '',        bg: 'var(--bg-3)',           bd: 'var(--bd-2)',            fg: 'var(--fg-4)' },
+};
+
+function FitBadge({ fit }: { fit?: ModelFit }) {
+  if (!fit || fit.level === 'unknown') return null;
+  const s = FIT_STYLE[fit.level];
+  return (
+    <span title={fit.reason} style={{ fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 20, background: s.bg, border: `1px solid ${s.bd}`, color: s.fg, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
+      {s.label}
+    </span>
+  );
+}
 
 const fmtSize = (b: number) => {
   if (!b) return '';
@@ -93,6 +116,10 @@ export default function SettingsPage() {
   const [switching, setSwitching] = useState(false);
   const [switchMsg, setSwitchMsg] = useState('');
 
+  // Models: detected hardware + which engines are running + per-model fit
+  const [system, setSystem] = useState<SystemStatus | null>(null);
+  const [rescanning, setRescanning] = useState(false);
+
   const isAdmin = !!(session?.user as { isAdmin?: boolean } | undefined)?.isAdmin;
 
   useEffect(() => { if (status === 'unauthenticated') router.replace('/login'); }, [status, router]);
@@ -109,6 +136,7 @@ export default function SettingsPage() {
       setOllamaReachable(d.reachable !== false);
     }).catch(() => setOllamaReachable(false));
     loadLocal();
+    loadSystem();
   }, [tab]);
 
   useEffect(() => {
@@ -249,6 +277,17 @@ export default function SettingsPage() {
     } catch { /* offline */ }
   }
 
+  // Detected hardware + live engine status + per-model fit. fresh=true re-probes
+  // the hardware (the Rescan button) instead of using the cached reading.
+  async function loadSystem(fresh = false) {
+    if (fresh) setRescanning(true);
+    try {
+      const r = await fetch(`/api/system${fresh ? '?fresh=1' : ''}`);
+      if (r.ok) setSystem(await r.json());
+    } catch { /* offline */ }
+    finally { if (fresh) setRescanning(false); }
+  }
+
   // Switch the local model and/or its context size. The server restarts, so we
   // poll until it's back up running what we asked for, showing progress meanwhile.
   async function switchLocal(opts: { model?: string; ctx?: number }) {
@@ -281,8 +320,12 @@ export default function SettingsPage() {
       }
       notify('Server is taking a while to come back — check status above.', false);
     } catch { notify('Network error', false); }
-    finally { setSwitching(false); setSwitchMsg(''); }
+    finally { setSwitching(false); setSwitchMsg(''); loadSystem(); }
   }
+
+  // Fit verdict + recommendation come from /api/system, keyed by file path.
+  const fitFor = (path: string): ModelFit | undefined => system?.localModels?.find(m => m.path === path)?.fit;
+  const recommendedPath = system?.recommended ?? null;
 
   const TABS: { id: Tab; label: string }[] = [
     { id: 'profile', label: 'Profile' },
@@ -544,6 +587,50 @@ export default function SettingsPage() {
         {/* Models tab (admin) */}
         {tab === 'models' && (
           <div className="anim-fade-in">
+            {/* Detected hardware — so a user knows up front what their machine can run */}
+            <SectionLabel>Your hardware</SectionLabel>
+            <div style={{ padding: '14px 16px', background: 'var(--bg-1)', border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', marginBottom: 22 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: system ? 13 : 0 }}>
+                <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', margin: 0 }}>{system ? system.hardwareSummary : 'Detecting…'}</p>
+                <button onClick={() => loadSystem(true)} disabled={rescanning} className="btn-ghost-sm" style={{ fontSize: 12, flexShrink: 0, opacity: rescanning ? 0.5 : 1 }}>{rescanning ? 'Scanning…' : 'Rescan'}</button>
+              </div>
+              {system && (
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 10 }}>
+                  {([
+                    ['Memory', `${system.hardware.totalRamGb} GB${system.hardware.availableRamGb ? ` · ${system.hardware.availableRamGb} GB free` : ''}`],
+                    ['Processor', `${system.hardware.cpuName} · ${system.hardware.cpuCores} cores`],
+                    ['Graphics', system.hardware.hasGpu && system.hardware.gpuName
+                      ? `${system.hardware.gpuName}${system.hardware.gpuVramGb ? ` · ${system.hardware.gpuVramGb} GB` : ''}${system.hardware.unifiedMemory ? ' (shared)' : ''}`
+                      : system.hardware.gpuError ? 'GPU driver error' : 'CPU only'],
+                  ] as [string, string][]).map(([k, v]) => (
+                    <div key={k} style={{ background: 'var(--bg-2)', border: '1px solid var(--bd)', borderRadius: 'var(--r)', padding: '8px 11px', minWidth: 0 }}>
+                      <p style={{ fontSize: 10, color: 'var(--fg-4)', margin: '0 0 3px', textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: 'JetBrains Mono, monospace' }}>{k}</p>
+                      <p style={{ fontSize: 12, color: 'var(--fg-2)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={v}>{v}</p>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* AI engines — which local backends are up right now */}
+            <SectionLabel>AI engines</SectionLabel>
+            <p style={{ fontSize: 12.5, color: 'var(--fg-3)', margin: '0 0 10px', lineHeight: 1.55 }}>Chakor can run models through any of these. If one is down (or a model crashed it), switch to another from the model menu in chat — no terminal needed.</p>
+            <div style={{ border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', overflow: 'hidden', marginBottom: 28 }}>
+              {(system?.engines ?? []).map(e => (
+                <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '12px 16px', borderBottom: '1px solid var(--bd)', background: 'var(--bg-1)' }}>
+                  <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: e.running ? 'var(--g)' : 'var(--bd-2)', boxShadow: e.running ? '0 0 6px rgba(34,197,94,.5)' : 'none' }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', margin: 0 }}>{e.label}{e.managed ? <span style={{ fontSize: 10, color: 'var(--fg-4)', fontWeight: 400 }}> · managed by Chakor</span> : ''}</p>
+                    <p style={{ fontSize: 11, color: 'var(--fg-4)', margin: '2px 0 0', fontFamily: 'JetBrains Mono, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={e.baseUrl}>{e.detail} · {e.baseUrl}</p>
+                  </div>
+                  <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 20, flexShrink: 0, fontFamily: 'JetBrains Mono, monospace', background: e.running ? 'var(--g-dim)' : 'var(--bg-3)', color: e.running ? 'var(--g-text)' : 'var(--fg-4)', border: `1px solid ${e.running ? 'var(--g-bd)' : 'var(--bd-2)'}` }}>
+                    {e.running ? (e.modelCount ? `${e.modelCount} model${e.modelCount === 1 ? '' : 's'}` : 'ready') : 'offline'}
+                  </span>
+                </div>
+              ))}
+              {!system && <p style={{ fontSize: 13, color: 'var(--fg-4)', padding: '14px 16px', margin: 0 }}>Checking engines…</p>}
+            </div>
+
             {/* Local model (llama.cpp) — switch the running model + context size */}
             <SectionLabel>Local model</SectionLabel>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', background: 'var(--bg-1)', border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', marginBottom: 12 }}>
@@ -599,18 +686,24 @@ export default function SettingsPage() {
               <div style={{ border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
                 {local.available.map(m => {
                   const current = (local.live.modelPath ?? '') === m.path || local.live.modelName === m.name;
+                  const fit = fitFor(m.path);
+                  const isRec = recommendedPath === m.path;
                   return (
                     <div key={m.path} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: '1px solid var(--bd)', background: current ? 'var(--g-dim)' : 'var(--bg-1)' }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                          {m.name}
-                          {m.vision && <span style={{ marginLeft: 8, fontSize: 9, padding: '1px 6px', borderRadius: 20, background: 'var(--bg-3)', color: 'var(--fg-3)', fontFamily: 'JetBrains Mono, monospace', verticalAlign: 'middle' }}>VISION</span>}
+                        <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{m.name}</span>
+                          <FitBadge fit={fit} />
+                          {isRec && <span title="Best fit for your hardware" style={{ fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 20, background: 'var(--g-dim)', border: '1px solid var(--g-bd)', color: 'var(--g-text)', fontFamily: 'JetBrains Mono, monospace', whiteSpace: 'nowrap' }}>RECOMMENDED</span>}
+                          {m.vision && <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 20, background: 'var(--bg-3)', color: 'var(--fg-3)', fontFamily: 'JetBrains Mono, monospace' }}>VISION</span>}
                         </p>
-                        <p style={{ fontSize: 11, color: 'var(--fg-4)', margin: '2px 0 0', fontFamily: 'JetBrains Mono, monospace' }}>{fmtSize(m.size)}</p>
+                        <p style={{ fontSize: 11, color: fit?.level === 'too_big' ? 'var(--err)' : 'var(--fg-4)', margin: '2px 0 0', fontFamily: 'JetBrains Mono, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {fmtSize(m.size)}{fit && fit.level !== 'unknown' ? ` · ${fit.reason}` : ''}
+                        </p>
                       </div>
                       {current
                         ? <span style={{ fontSize: 11, color: 'var(--g-text)', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, flexShrink: 0 }}>RUNNING</span>
-                        : <button disabled={switching} onClick={() => switchLocal({ model: m.path })} className="btn btn-outline" style={{ fontSize: 12, padding: '6px 14px', flexShrink: 0, opacity: switching ? 0.5 : 1 }}>Use</button>}
+                        : <button disabled={switching} onClick={() => switchLocal({ model: m.path })} className="btn btn-outline" style={{ fontSize: 12, padding: '6px 14px', flexShrink: 0, opacity: switching ? 0.5 : 1 }} title={fit?.level === 'too_big' ? 'This model is likely too big for your machine and may crash' : undefined}>Use</button>}
                     </div>
                   );
                 })}
@@ -711,7 +804,7 @@ export default function SettingsPage() {
 
             <div style={{ padding: '16px 20px', background: 'var(--bg-1)', border: '1px solid var(--bd)', borderRadius: 'var(--r-md)' }}>
               <SectionLabel>About</SectionLabel>
-              {[['Version', '2.1.0'], ['Stack', 'Next.js · SQLite · llama.cpp'], ['Privacy', 'Self-hosted · no telemetry'], ['Inference', 'Local by default · optional API keys']].map(([k, v]) => (
+              {[['Version', '2.2.0'], ['Stack', 'Next.js · SQLite · llama.cpp'], ['Privacy', 'Self-hosted · no telemetry'], ['Inference', 'llama.cpp · Ollama · LM Studio · optional API keys']].map(([k, v]) => (
                 <div key={k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                   <span style={{ fontSize: 12, color: 'var(--fg-4)', fontFamily: 'JetBrains Mono, monospace' }}>{k}</span>
                   <span style={{ fontSize: 12, color: k === 'Privacy' || k === 'Inference' ? 'var(--ok)' : 'var(--fg-2)', fontFamily: 'JetBrains Mono, monospace', fontWeight: k === 'Privacy' || k === 'Inference' ? 600 : 400 }}>{v}</span>

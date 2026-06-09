@@ -57,9 +57,11 @@ Chakor is built around that idea, and it tries to be genuinely nice to use while
 ## Everything it does
 
 **Models, your way**
-- ✓ Local models through Ollama or llama.cpp, on GPU or plain CPU
+- ✓ Local models through Ollama, LM Studio, or llama.cpp, on GPU or plain CPU
 - ✓ Cloud models with your own keys: OpenAI, Anthropic, Google, OpenRouter
 - ✓ Switch model per message, and swap the local model or its context size from the web, no terminal
+- ✓ Hardware-aware: Chakor reads your RAM and GPU and tags each local model FITS, TIGHT, or TOO BIG, so you don't load one that crashes
+- ✓ If one local engine is down, the model menu offers the running ones as one-click switches
 - ✓ Load and unload local models and see their size and quant from the model picker
 
 **Knowledge and the web**
@@ -163,19 +165,24 @@ Chakor needs something to talk to. Easiest options, in order:
    ```
    Chakor finds installed Ollama models on its own and lists them in the model picker. This is the simplest way to "run any model."
 
-2. **llama.cpp.** Point `LLAMA_SERVER_BIN` at your `llama-server` and `LLAMA_GGUF` at a model, and Chakor runs it for you as part of the same service. From **Settings → Models** you then switch the model and context size from the web, no terminal. Drop more `.gguf` files in `~/Downloads`, `~/models`, or `~/.lmstudio` (or set `CHAKOR_MODELS_DIR`) and they show up to switch to. Already run your own `llama-server`? Set `LLAMA_BASE_URL` and `CHAKOR_SUPERVISE_LLAMA=false` and Chakor just uses it.
+2. **LM Studio.** Already use LM Studio? Open its **Developer** tab and **Start Server**. Chakor talks to it at `http://127.0.0.1:1234/v1` (override with `LMSTUDIO_BASE_URL`) and the models you have loaded there appear in the picker automatically, the same as Ollama.
 
-3. **Cloud keys.** Paste a key into `.env.local` and that provider's models show up:
+3. **llama.cpp.** Point `LLAMA_SERVER_BIN` at your `llama-server` and `LLAMA_GGUF` at a model, and Chakor runs it for you as part of the same service. From **Settings → Models** you then switch the model and context size from the web, no terminal. Drop more `.gguf` files in `~/Downloads`, `~/models`, or `~/.lmstudio` (or set `CHAKOR_MODELS_DIR`) and they show up to switch to. Already run your own `llama-server`? Set `LLAMA_BASE_URL` and `CHAKOR_SUPERVISE_LLAMA=false` and Chakor just uses it.
+
+4. **Cloud keys.** Paste a key into `.env.local` and that provider's models show up:
    `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_AI_API_KEY`.
 
-4. **OpenRouter.** One key for hundreds of models, including the big ones. Set `OPENROUTER_API_KEY` and list the models you want in `OPENROUTER_MODELS`.
+5. **OpenRouter.** One key for hundreds of models, including the big ones. Set `OPENROUTER_API_KEY` and list the models you want in `OPENROUTER_MODELS`.
+
+Not sure what your machine can handle? **Settings → Models** shows your detected RAM and GPU and marks each local model FITS, TIGHT, or TOO BIG, with a RECOMMENDED pick. Start there and you won't load something that just crashes.
 
 ## Switch models any time
 
 This is the part people usually have to fight a terminal for. In Chakor it is all in the UI.
 
 - **Per message.** Click the model name in the chat header and pick any model you have set up, local or cloud. Your choice sticks to that conversation.
-- **Swap the local model live.** Go to **Settings → Models**. Chakor lists every `.gguf` it found on your machine. Click one and it loads, no editing config files, no restart in the terminal. The change is an in process restart of the bundled `llama-server`, so it just happens.
+- **Switch when an engine is down.** The model menu shows which local engines (llama.cpp, Ollama, LM Studio) are running. If the one you are on crashed or isn't up, the menu offers the running ones as one-click switches, so you are never stuck on a dead backend.
+- **Swap the local model live.** Go to **Settings → Models**. Chakor lists every `.gguf` it found on your machine, each tagged with how well it fits your hardware. Click one and it loads, no editing config files, no restart in the terminal. The change is an in process restart of the bundled `llama-server`, so it just happens.
 - **Change the context size.** Same screen. It maps to a real `num_ctx` for Ollama, a server reload for the local model, and a history budget for cloud models, so the number means something everywhere.
 - **Vision turns on by itself** when the running local model supports images, and the attach button appears.
 - **Add a cloud key without redeploying.** Each user can paste their own API keys under **Settings**, so a key is per person, not baked into the server.
@@ -197,8 +204,10 @@ Everything lives in `.env.local`. The ones you will actually touch:
 | `AUTH_SECRET` | Required. Signs login sessions. Generate with `openssl rand -base64 32`. |
 | `REGISTRATION_MODE` | `open`, `invite`, or `closed`. With `invite`, also set `INVITE_CODE`. |
 | `OLLAMA_BASE_URL` | Where Ollama runs. Default is fine for a local install. |
+| `LMSTUDIO_BASE_URL` | Where LM Studio's server runs. Default `http://127.0.0.1:1234/v1`. Loaded models appear automatically. |
 | `LLAMA_SERVER_BIN`, `LLAMA_GGUF` | llama.cpp binary plus the default model Chakor runs for you. Switch both live in Settings → Models. |
 | `CHAKOR_MODELS_DIR`, `CHAKOR_SUPERVISE_LLAMA` | Extra folders to scan for `.gguf` files. Set supervise to `false` to run llama-server yourself. |
+| `CHAKOR_LLAMA_MAX_CRASHES` | How many fast crashes before Chakor stops relaunching a too-big model and tells you to pick a smaller one. Default 4. |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_AI_API_KEY` | Turn on cloud models. |
 | `OPENROUTER_API_KEY`, `OPENROUTER_MODELS` | One key, many models. List them as `id\|Label`, comma separated. |
 | `SEARXNG_URL`, `BRAVE_SEARCH_API_KEY` | Web search backends. |
@@ -281,8 +290,9 @@ Already had the old two service setup (a separate llama server)? Run `scripts/us
 | Problem | Fix |
 | --- | --- |
 | `npm install` fails on peer deps | Use `npm install --legacy-peer-deps`. |
-| Chat says it cannot connect | Is Ollama or llama.cpp running, or did you set a cloud key. |
-| No models in the picker | Pull a model with `ollama pull`, or add an API key, then reload. |
+| Chat says it cannot connect | Is Ollama, LM Studio, or llama.cpp running, or did you set a cloud key. The model menu and Settings → Models both show which engines are up. |
+| Local model keeps crashing | It is probably too big for your machine. Settings → Models marks it TOO BIG and suggests one that fits, or switch to Ollama or LM Studio from the model menu. |
+| No models in the picker | Pull a model with `ollama pull`, load one in LM Studio, or add an API key, then reload. |
 | Search finds nothing | Turn on `json` format in SearXNG, or set `BRAVE_SEARCH_API_KEY`. |
 | Cannot sign in after first run | First account registered is the admin. Check `REGISTRATION_MODE` and `INVITE_CODE`. |
 

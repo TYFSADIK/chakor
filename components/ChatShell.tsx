@@ -21,6 +21,7 @@ type Msg    = { role: 'user' | 'assistant'; content: string; streaming?: boolean
 type User   = { id: number; name?: string | null; email?: string | null; isAdmin?: boolean };
 type Doc    = { id: number; filename: string; mime_type: string | null; size_bytes: number | null; created_at: number };
 type Model  = { id: string; name: string; provider: string; contextWindow: number; badge?: string; vision?: boolean };
+type Engine = { id: string; label: string; running: boolean; modelCount: number; detail: string; crashed?: boolean };
 type Toast  = { id: number; msg: string; ok: boolean };
 type Prompt = { id: number; title: string; body: string; created_at: number };
 type ToolInfo = { name: string; description: string };
@@ -149,15 +150,24 @@ function ToolChips({ events }: { events: ToolEvt[] }) {
 
 // ─── Model dropdown ───────────────────────────────────────────
 type ModelDetail = { parameterSize?: string|null; quantization?: string|null };
-function ModelSelect({ models, selected, onChange, loadedNames, details, isAdmin, onToggleLoad, onOpenChange, localName }: {
+const ENGINE_LABEL: Record<string,string> = { llama:'llama.cpp', ollama:'Ollama', lmstudio:'LM Studio' };
+
+function ModelSelect({ models, selected, onChange, loadedNames, details, isAdmin, onToggleLoad, onOpenChange, localName, engines }: {
   models: Model[]; selected: string; onChange: (id: string) => void;
   loadedNames: Set<string>; details: Record<string, ModelDetail>; isAdmin: boolean;
   onToggleLoad: (name: string, loaded: boolean) => void; onOpenChange: (open: boolean) => void;
-  localName?: string | null;
+  localName?: string | null; engines: Engine[];
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const cur = models.find(m=>m.id===selected)??models[0];
+  // The fix for "llama.cpp crashed, now what": if the engine behind the selected
+  // model is down, offer the running engines (with models) as one-click switches
+  // right at the top of the picker, so nobody gets stuck on a dead backend.
+  const curEngine = engines.find(e=>e.id===cur?.provider);
+  const engineDown = !!curEngine && !curEngine.running;
+  const alts = engineDown ? engines.filter(e=>e.running && e.modelCount>0) : [];
+  const firstModelOf = (id:string) => models.find(m=>m.provider===id)?.id;
   useEffect(()=>{
     if(!open) return;
     const h=(e:MouseEvent)=>{if(ref.current&&!ref.current.contains(e.target as Node))setOpen(false);};
@@ -175,11 +185,30 @@ function ModelSelect({ models, selected, onChange, loadedNames, details, isAdmin
       </button>
       {open && (
         <div className="anim-scale-in" style={{position:'absolute',top:'calc(100% + 6px)',left:0,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:10,boxShadow:'var(--sh-lg)',minWidth:252,maxWidth:300,overflow:'hidden'}}>
-          {['llama','ollama','openai','anthropic','google','openrouter'].map(p=>{
+          {engineDown && (
+            <div style={{padding:'10px 12px',background:'rgba(251,191,36,.08)',borderBottom:'1px solid var(--bd-2)'}}>
+              <p style={{fontSize:11.5,color:'var(--fg-2)',margin:'0 0 7px',lineHeight:1.5}}>
+                <strong style={{color:'#f5b73d'}}>{ENGINE_LABEL[curEngine!.id]??curEngine!.id} isn&apos;t running.</strong> {curEngine!.crashed?'It kept crashing - the model is likely too big for this machine.':''}
+              </p>
+              {alts.length>0 ? (
+                <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                  {alts.map(e=>{ const mid=firstModelOf(e.id); if(!mid) return null; return (
+                    <button key={e.id} onClick={()=>{onChange(mid);setOpen(false);}}
+                      style={{fontSize:11.5,padding:'5px 10px',borderRadius:'var(--r)',border:'1px solid var(--g-bd)',background:'var(--g-dim)',color:'var(--g-text)',cursor:'pointer',fontFamily:'Inter,sans-serif'}}>
+                      Use {e.label} ({e.modelCount})
+                    </button>
+                  );})}
+                </div>
+              ) : (
+                <p style={{fontSize:11,color:'var(--fg-4)',margin:0}}>No other local engine is running. Start Ollama or LM Studio, or pick a cloud model.</p>
+              )}
+            </div>
+          )}
+          {['llama','ollama','lmstudio','openai','anthropic','google','openrouter'].map(p=>{
             const grp=models.filter(m=>m.provider===p); if(!grp.length) return null;
             return (
               <div key={p}>
-                <div style={{padding:'8px 12px 4px',fontSize:10,fontWeight:600,color:'var(--fg-4)',textTransform:'uppercase',letterSpacing:'0.08em',fontFamily:'JetBrains Mono,monospace'}}>{p}</div>
+                <div style={{padding:'8px 12px 4px',fontSize:10,fontWeight:600,color:'var(--fg-4)',textTransform:'uppercase',letterSpacing:'0.08em',fontFamily:'JetBrains Mono,monospace'}}>{ENGINE_LABEL[p]??p}</div>
                 {grp.map(m=>{
                   const isOllama=m.provider==='ollama';
                   const loaded=isOllama&&loadedNames.has(m.name);
@@ -643,6 +672,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   const [loadedNames, setLoadedNames] = useState<Set<string>>(new Set());
   const [modelDetails, setModelDetails] = useState<Record<string,{parameterSize?:string|null;quantization?:string|null}>>({});
   const [localLive, setLocalLive] = useState<LocalLive|null>(null);
+  const [engines, setEngines] = useState<Engine[]>([]);
   const [ctxChoice, setCtxChoice] = useState<number|null>(null);
   const [themeOpen, setThemeOpen] = useState(false);
   const tts = useTextToSpeech();
@@ -720,7 +750,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   // For the local model, trust what llama-server actually reports about itself
   // (so switching to a vision GGUF lights up image attach without a config flag).
   const visionOk = curModel?.provider==='llama' ? (localLive?.vision ?? !!curModel?.vision) : !!curModel?.vision;
-  const toolsOk = !!curModel && ['openai','openrouter','ollama','llama'].includes(curModel.provider);
+  const toolsOk = !!curModel && ['openai','openrouter','ollama','lmstudio','llama'].includes(curModel.provider);
   const canSend = input.trim().length>0 || images.length>0;
 
   const loadConv = useCallback(async(id:string)=>{
@@ -742,13 +772,14 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   async function deleteFolderUI(id:number) { await fetch(`/api/folders/${id}`,{method:'DELETE'}).catch(()=>{}); setFolders(p=>p.filter(f=>f.id!==id)); setConvs(p=>p.map(c=>c.folder_id===id?{...c,folder_id:null}:c)); }
   async function refreshLoaded() { try { const r=await fetch('/api/models/loaded'); const d=await r.json(); if(Array.isArray(d.models)) setLoadedNames(new Set((d.models as {name:string}[]).map(m=>m.name))); } catch {} }
   async function refreshLocal() { try { const r=await fetch('/api/models/local'); if(r.ok){ const d=await r.json(); if(d?.live) setLocalLive(d.live); } } catch {} }
+  async function refreshEngines() { try { const r=await fetch('/api/system'); if(r.ok){ const d=await r.json(); if(Array.isArray(d.engines)) setEngines(d.engines); } } catch {} }
   async function fetchModelDetails(names:string[]) {
     const missing=names.filter(n=>!(n in modelDetails));
     if(!missing.length) return;
     const entries=await Promise.all(missing.map(async n=>{ try { const r=await fetch('/api/models/show',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:n})}); if(!r.ok) return [n,{}] as const; const d=await r.json(); return [n,{parameterSize:d.parameterSize,quantization:d.quantization}] as const; } catch { return [n,{}] as const; } }));
     setModelDetails(p=>{const next={...p}; for(const [n,d] of entries) next[n]=d; return next;});
   }
-  function onModelMenuOpen(open:boolean) { if(open){ refreshLoaded(); refreshLocal(); fetchModelDetails(models.filter(m=>m.provider==='ollama').map(m=>m.name)); } }
+  function onModelMenuOpen(open:boolean) { if(open){ refreshLoaded(); refreshLocal(); refreshEngines(); fetchModelDetails(models.filter(m=>m.provider==='ollama').map(m=>m.name)); } }
   async function toggleLoad(name:string, loaded:boolean) {
     toast(loaded?`Unloading ${name}…`:`Loading ${name}…`);
     try { const r=await fetch('/api/models/loaded',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,action:loaded?'unload':'load'})}); const d=await r.json(); if(!r.ok) toast(d.error??'Failed',false); else toast(loaded?`Unloaded ${name}`:`Loaded ${name}`); } catch { toast('Network error',false); }
@@ -1024,7 +1055,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
           <div style={{display:'flex',alignItems:'center',gap:4,flexShrink:0}}>
             <ModelSelect models={models} selected={modelId} onChange={setModelId}
               loadedNames={loadedNames} details={modelDetails} isAdmin={!!user.isAdmin}
-              onToggleLoad={toggleLoad} onOpenChange={onModelMenuOpen} localName={localLive?.modelName}/>
+              onToggleLoad={toggleLoad} onOpenChange={onModelMenuOpen} localName={localLive?.modelName} engines={engines}/>
             <ContextControl model={curModel} localLive={localLive} isAdmin={!!user.isAdmin}
               ctxChoice={ctxChoice} onChoose={setCtxChoice}/>
             {activeId&&msgs.length>0&&(

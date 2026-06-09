@@ -1,5 +1,5 @@
 import type { ChatMessage, LlamaStats } from './llama';
-import { type ModelConfig, OLLAMA_BASE_URL, llamaEndpoint } from './models';
+import { type ModelConfig, OLLAMA_BASE_URL, LMSTUDIO_BASE_URL, llamaEndpoint } from './models';
 import { TOOLS, toolDefs } from './tools';
 
 /**
@@ -27,7 +27,7 @@ export interface AgentOptions {
 
 /** Which providers we can run the tool loop against. */
 export function supportsTools(model: ModelConfig): boolean {
-  return ['openai', 'openrouter', 'ollama', 'llama'].includes(model.provider);
+  return ['openai', 'openrouter', 'ollama', 'lmstudio', 'llama'].includes(model.provider);
 }
 
 function endpointFor(model: ModelConfig): { url: string; headers: Record<string, string>; model: string } | null {
@@ -53,6 +53,8 @@ function endpointFor(model: ModelConfig): { url: string; headers: Record<string,
     }
     case 'ollama':
       return { url: `${OLLAMA_BASE_URL}/v1/chat/completions`, headers: { 'Content-Type': 'application/json' }, model: model.id.replace(/^ollama:/, '') };
+    case 'lmstudio':
+      return { url: `${LMSTUDIO_BASE_URL}/chat/completions`, headers: { 'Content-Type': 'application/json' }, model: model.id.replace(/^lmstudio:/, '') };
     case 'llama': {
       const e = llamaEndpoint();
       return { url: `${e.url}/v1/chat/completions`, headers: { 'Content-Type': 'application/json' }, model: e.label };
