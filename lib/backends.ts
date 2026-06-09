@@ -11,9 +11,12 @@
  * Server-only. Every probe fails fast (short timeout) and never throws, so a
  * dead engine just reports running:false instead of breaking the page.
  */
+import { promises as fs } from 'node:fs';
 import { discoverOllamaModels, discoverLmStudioModels, OLLAMA_BASE_URL, LMSTUDIO_BASE_URL } from './models';
-import { liveProps } from './local-llama';
+import { liveProps, readRuntimeEnv, resolveModelPath } from './local-llama';
 import { llamaSupervisor } from './llama-supervisor';
+import { detectHardware } from './hardware';
+import { maxContextForModel } from './hwfit';
 
 export type EngineId = 'llama' | 'ollama' | 'lmstudio';
 
@@ -134,4 +137,95 @@ export function suggestEngine(engines: EngineStatus[], selectedProvider: string)
   if (cur?.running) return null; // selected engine is fine
   const alternatives = engines.filter((e) => e.running && e.modelCount > 0).sort((a, b) => b.modelCount - a.modelCount);
   return alternatives[0] ?? null;
+}
+
+// ─── One model at a time: free the others when you switch engines ─────────────
+// Most self-hosters can't hold two models in VRAM at once, so switching engines
+// has to evict the previous one or the new one OOM-crashes. These helpers do that
+// eviction; lib/app-settings' multiModel turns it off for machines that can cope.
+
+/** Provider -> engine id. Cloud providers map to null (no local memory to free). */
+export function engineForProvider(provider: string): EngineId | null {
+  return provider === 'llama' || provider === 'ollama' || provider === 'lmstudio' ? provider : null;
+}
+
+/** Unload every model Ollama currently holds in memory. Returns how many. */
+export async function unloadAllOllama(): Promise<number> {
+  try {
+    const ps = await fetch(`${OLLAMA_BASE_URL}/api/ps`, { signal: AbortSignal.timeout(2500) });
+    if (!ps.ok) return 0;
+    const data = await ps.json();
+    const names = ((data.models ?? []) as Array<{ name?: string; model?: string }>)
+      .map((m) => m.name ?? m.model).filter((n): n is string => Boolean(n));
+    let n = 0;
+    for (const name of names) {
+      try {
+        // keep_alive 0 tells Ollama to drop the model from memory right away.
+        await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: name, prompt: '', stream: false, keep_alive: 0 }),
+          signal: AbortSignal.timeout(8000),
+        });
+        n++;
+      } catch { /* best effort */ }
+    }
+    return n;
+  } catch { return 0; }
+}
+
+/** Free every local engine except `target`. Returns human labels of what we freed. */
+export async function freeEnginesExcept(target: EngineId | null): Promise<string[]> {
+  const freed: string[] = [];
+  if (target !== 'llama') {
+    const st = llamaSupervisor.status();
+    if (st.running && st.managing) { await llamaSupervisor.stop(); freed.push('llama.cpp'); }
+  }
+  if (target !== 'ollama') {
+    const n = await unloadAllOllama();
+    if (n > 0) freed.push(`Ollama (${n})`);
+  }
+  // LM Studio has no remote-unload endpoint; its model stays until unloaded in
+  // the app. Nothing to do here besides leave it be.
+  return freed;
+}
+
+/** Make sure the supervised llama.cpp server is up, (re)starting it at the
+ *  biggest context this machine can back for its model. */
+export async function ensureLlamaActive(): Promise<void> {
+  if (!llamaSupervisor.enabled) return;
+  if ((await liveProps()).online) return; // already serving
+  const cfg = await readRuntimeEnv();
+  const modelPath = await resolveModelPath(cfg);
+  let ctx = cfg.ctx ?? 8192;
+  if (modelPath) {
+    try {
+      const [hw, size] = await Promise.all([detectHardware(), fs.stat(modelPath).then((s) => s.size)]);
+      ctx = maxContextForModel(size, hw);
+    } catch { /* fall back to saved/default ctx */ }
+  }
+  await llamaSupervisor.restart({ model: modelPath ?? undefined, ctx });
+}
+
+function activeEngineStore(): typeof globalThis & { __chakorActiveEngine?: EngineId | null } {
+  return globalThis as typeof globalThis & { __chakorActiveEngine?: EngineId | null };
+}
+export function lastActiveEngine(): EngineId | null | undefined {
+  return activeEngineStore().__chakorActiveEngine;
+}
+
+/**
+ * Make `target` the one live local engine: evict the others, and if the target
+ * is llama.cpp, bring it up at max context. No-op eviction for cloud targets
+ * (they use no local memory, so we leave local engines as they are).
+ */
+export async function activateEngine(target: EngineId | null): Promise<{ freed: string[]; llamaStarted: boolean }> {
+  const freed = await freeEnginesExcept(target);
+  let llamaStarted = false;
+  if (target === 'llama') {
+    const wasOnline = (await liveProps()).online;
+    await ensureLlamaActive();
+    llamaStarted = !wasOnline && (await liveProps()).online;
+  }
+  activeEngineStore().__chakorActiveEngine = target;
+  return { freed, llamaStarted };
 }

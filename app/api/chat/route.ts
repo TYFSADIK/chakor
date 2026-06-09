@@ -17,6 +17,8 @@ import { searxSearch, formatSearchContext } from '@/lib/searxng';
 import { bm25Search, formatRagContext } from '@/lib/rag';
 import { getModel, llamaEndpoint, defaultModel } from '@/lib/models';
 import { buildSystemPrompt, buildResearchPrompt } from '@/lib/system-prompt';
+import { engineForProvider, activateEngine, lastActiveEngine } from '@/lib/backends';
+import { readAppSettings } from '@/lib/app-settings';
 import { randomUUID } from 'node:crypto';
 
 export async function POST(req: NextRequest) {
@@ -69,6 +71,17 @@ export async function POST(req: NextRequest) {
   // Resolve model — fall back to default local model
   const selectedModel = (modelId ? getModel(modelId) : null) ?? defaultModel();
   const useTools = toolIds.length > 0 && supportsTools(selectedModel);
+
+  // One model at a time (unless the user allows multiple): if this message uses a
+  // different local engine than the last one, evict the others first so the new
+  // model has room instead of OOM-crashing. Skips instantly when nothing changed,
+  // and never blocks the chat on its own failure.
+  try {
+    const target = engineForProvider(selectedModel.provider);
+    if (target && target !== lastActiveEngine() && !(await readAppSettings()).multiModel) {
+      await activateEngine(target);
+    }
+  } catch { /* best effort */ }
 
   // Resolve or create conversation
   let convId = conversationId;

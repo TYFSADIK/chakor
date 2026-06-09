@@ -1,5 +1,28 @@
 # Changelog
 
+## 2.4
+
+Downloads that don't quit on you, and never two models fighting for memory.
+
+Background downloads
+- Hugging Face downloads run on the server now, not in your browser. Start one,
+  close the tab, walk away. A chip in the chat header shows progress, speed, and
+  time left from anywhere in the app, and you can cancel from there too. Reopen
+  the page later and it's still going, or done and ready.
+
+One model at a time, so modest machines don't crash
+- Switching engines unloads the previous model first, so two models never fight
+  over the same VRAM and OOM-crash. On a roomy rig, flip on "keep multiple models
+  loaded" in Settings for instant switching; on a modest one it stays safely
+  one-at-a-time and says so. Chakor reads your hardware to decide what to offer.
+- A "Max" context button loads the local model at the biggest window your machine
+  can actually back, worked out from your RAM and VRAM.
+
+Privacy, as ever
+- Models download from the source straight to your disk. Nothing routes through
+  us, no account, no telemetry, no data broker in the middle. Once a model is
+  down it runs fully offline.
+
 ## 2.3
 
 Switch engines from the web, and get models without a terminal.

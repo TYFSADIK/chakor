@@ -183,8 +183,10 @@ This is the part people usually have to fight a terminal for. In Chakor it is al
 
 - **Per message.** Click the model name in the chat header and pick any model you have set up, local or cloud. Your choice sticks to that conversation.
 - **Switch engines from the menu.** The model menu has a row for llama.cpp, Ollama, and LM Studio with a live running light and model count. Tap one to move your whole stack to it. If the engine you are on crashed or isn't up, it points you at a running one, so you are never stuck on a dead backend.
+- **One model at a time, automatically.** Switching engines unloads the previous model first, so two models never fight over the same VRAM and crash. Got a roomy GPU? Flip on "keep multiple models loaded" in **Settings → Models** for instant switching. On a modest machine it stays safely one-at-a-time.
+- **Download in the background.** A Hugging Face download runs on the server, not in your browser, so you can close the tab and it keeps going. A chip in the chat header shows progress, speed, and time left, and lets you cancel from anywhere.
 - **Swap the local model live.** Go to **Settings → Models**. Chakor lists every `.gguf` it found on your machine, each tagged with how well it fits your hardware. Click one and it loads, no editing config files, no restart in the terminal. The change is an in process restart of the bundled `llama-server`, so it just happens.
-- **Change the context size.** Same screen. It maps to a real `num_ctx` for Ollama, a server reload for the local model, and a history budget for cloud models, so the number means something everywhere.
+- **Change the context size.** Same screen. It maps to a real `num_ctx` for Ollama, a server reload for the local model, and a history budget for cloud models, so the number means something everywhere. **Max** loads at the biggest window your hardware can back.
 - **Vision turns on by itself** when the running local model supports images, and the attach button appears.
 - **Add a cloud key without redeploying.** Each user can paste their own API keys under **Settings**, so a key is per person, not baked into the server.
 - **Load and unload** local models and read their size and quant straight from the picker (admin only for load and unload).

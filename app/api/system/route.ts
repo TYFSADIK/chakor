@@ -3,7 +3,7 @@ import { auth } from '@/lib/auth';
 import type { Session } from 'next-auth';
 import { detectHardware, hardwareSummary } from '@/lib/hardware';
 import { probeEngines } from '@/lib/backends';
-import { fitModel, recommendedModelPath } from '@/lib/hwfit';
+import { fitModel, recommendedModelPath, maxContextForModel } from '@/lib/hwfit';
 import { scanLocalModels, liveProps } from '@/lib/local-llama';
 
 function isAdmin(session: Session | null): boolean {
@@ -52,6 +52,7 @@ export async function GET(req: NextRequest) {
     size: m.size,
     vision: m.vision,
     fit: fitModel(m.size, hardware),
+    maxCtx: maxContextForModel(m.size, hardware),
   }));
 
   return NextResponse.json({

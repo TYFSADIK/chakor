@@ -143,3 +143,30 @@ export function recommendedCtx(sizeBytes: number, hw: Hardware, want = 8192): nu
   if (max <= 0) return 2048; // nothing comfortable; smallest sensible window
   return Math.min(want, max);
 }
+
+/**
+ * The biggest context this machine can actually back for a given model, using
+ * all available memory (VRAM if the model fits there, otherwise system RAM for
+ * the KV cache). This is what "context = maximum your hardware allows" loads at.
+ */
+export function maxContextForModel(sizeBytes: number, hw: Hardware): number {
+  const fit = fitModel(sizeBytes, hw);
+  const { comfortable, ceiling } = memoryBudget(hw);
+  // GPU-resident model: KV must share VRAM with the weights. CPU/offload model:
+  // KV lives in system RAM, so budget against the (larger) RAM ceiling.
+  const budget = (fit.onGpu ? comfortable : ceiling) * 0.92;
+  const max = largestCtxWithin(sizeBytes, budget);
+  return Math.min(Math.max(max || 2048, 2048), 32768);
+}
+
+/**
+ * Can this machine comfortably hold more than one local model in memory at once?
+ * Used to decide whether to even offer the "keep multiple models loaded" option.
+ * A roomy GPU (or lots of RAM on a CPU box) can; a modest laptop cannot, so it
+ * gets the safe one-model-at-a-time default.
+ */
+export function canRunMultipleModels(hw: Hardware): boolean {
+  if (hw.hasGpu && !hw.unifiedMemory && hw.gpuVramGb) return hw.gpuVramGb >= 16;
+  if (hw.unifiedMemory && hw.gpuVramGb) return hw.gpuVramGb >= 24; // shared pool, keep headroom
+  return hw.totalRamGb >= 32; // CPU-only
+}

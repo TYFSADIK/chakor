@@ -21,7 +21,8 @@ type Hardware = { totalRamGb: number; availableRamGb: number; cpuName: string; c
 type Engine = { id: string; label: string; running: boolean; baseUrl: string; modelCount: number; detail: string; managed?: boolean; crashed?: boolean };
 type HfRepo = { id: string; downloads: number; likes: number; updatedAt: string | null };
 type HfFile = { path: string; size: number; label: string; quant: string | null; parts?: string[]; fit: ModelFit };
-type SystemStatus = { hardware: Hardware; hardwareSummary: string; engines: Engine[]; localModels?: (LocalModel & { fit: ModelFit })[]; recommended?: string | null };
+type SystemStatus = { hardware: Hardware; hardwareSummary: string; engines: Engine[]; localModels?: (LocalModel & { fit: ModelFit; maxCtx: number })[]; recommended?: string | null };
+type DownloadJob = { id: string; repo: string; file: string; name: string; status: 'downloading' | 'done' | 'error' | 'cancelled'; total: number; downloaded: number; pct: number; speedBps: number; etaSec: number | null; error: string | null };
 
 const FIT_STYLE: Record<FitLevel, { label: string; bg: string; bd: string; fg: string }> = {
   fits:    { label: 'FITS',    bg: 'var(--g-dim)',          bd: 'var(--g-bd)',            fg: 'var(--g-text)' },
@@ -121,10 +122,12 @@ export default function SettingsPage() {
   const [hfOpenRepo, setHfOpenRepo] = useState<string | null>(null);
   const [hfFiles, setHfFiles] = useState<HfFile[]>([]);
   const [hfFilesLoading, setHfFilesLoading] = useState(false);
-  const [hfDownloading, setHfDownloading] = useState<string | null>(null); // "repo/file" key
-  const [hfStatus, setHfStatus] = useState('');
-  const [hfPct, setHfPct] = useState<number | null>(null);
-  const hfAbort = useRef<AbortController | null>(null);
+  const [downloads, setDownloads] = useState<DownloadJob[]>([]);
+  const doneSeen = useRef<Set<string>>(new Set());
+
+  // Models: one-model-at-a-time vs. keep several loaded (capability gated)
+  const [multiModel, setMultiModel] = useState(false);
+  const [canMultiModel, setCanMultiModel] = useState(false);
 
   // Models: local llama.cpp manager
   const [local, setLocal] = useState<LocalStatus | null>(null);
@@ -152,6 +155,12 @@ export default function SettingsPage() {
     }).catch(() => setOllamaReachable(false));
     loadLocal();
     loadSystem();
+    loadExclusivity();
+    refreshDownloads();
+    // Poll the background downloads while this tab is open so the bars move.
+    const id = setInterval(refreshDownloads, 1500);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
 
   useEffect(() => {
@@ -308,40 +317,53 @@ export default function SettingsPage() {
     finally { setHfFilesLoading(false); }
   }
 
-  // Download a GGUF to the models dir, streaming progress like the Ollama pull.
+  // Kick off a background download. It runs on the server, so it keeps going even
+  // if you leave this page. Progress shows up in the Downloads list below.
   async function hfDownload(repo: string, file: string) {
-    if (hfDownloading) return;
-    setHfDownloading(`${repo}/${file}`); setHfStatus('Starting…'); setHfPct(null);
-    const ac = new AbortController(); hfAbort.current = ac;
     try {
-      const r = await fetch('/api/models/hf/pull', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo, file }), signal: ac.signal });
-      if (!r.ok || !r.body) { const d = await r.json().catch(() => ({})); notify(d.error ?? 'Download failed', false); return; }
-      const reader = r.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '', failed = false;
-      outer: while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const parts = buf.split('\n\n');
-        buf = parts.pop() ?? '';
-        for (const part of parts) {
-          const line = part.trim();
-          if (!line.startsWith('data:')) continue;
-          const data = line.slice(5).trim();
-          if (data === '[DONE]') break outer;
-          try {
-            const p = JSON.parse(data) as { status?: string; completed?: number; total?: number; error?: string; done?: boolean };
-            if (p.error) { notify(p.error, false); failed = true; break outer; }
-            if (p.status) setHfStatus(p.status);
-            if (typeof p.total === 'number' && p.total > 0 && typeof p.completed === 'number') setHfPct(Math.round((p.completed / p.total) * 100));
-          } catch { /* partial frame */ }
-        }
+      const r = await fetch('/api/models/hf/pull', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo, file }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { notify(d.error ?? 'Could not start download', false); return; }
+      notify('Download started — it keeps running in the background');
+      refreshDownloads();
+    } catch { notify('Could not start download', false); }
+  }
+
+  async function refreshDownloads() {
+    try {
+      const r = await fetch('/api/models/hf/jobs');
+      if (!r.ok) return;
+      const d = await r.json();
+      const jobs: DownloadJob[] = Array.isArray(d.jobs) ? d.jobs : [];
+      // When a download finishes, pull the new file into the local list once.
+      for (const j of jobs) {
+        if (j.status === 'done' && !doneSeen.current.has(j.id)) { doneSeen.current.add(j.id); loadLocal(); loadSystem(); }
       }
-      if (!failed) { notify('Model downloaded and ready'); await loadLocal(); loadSystem(); }
-    } catch (e) {
-      if (!(e instanceof DOMException && e.name === 'AbortError')) notify('Download failed', false);
-    } finally { setHfDownloading(null); setHfStatus(''); setHfPct(null); hfAbort.current = null; }
+      setDownloads(jobs);
+    } catch { /* offline */ }
+  }
+
+  async function hfCancelJob(id: string) {
+    try { await fetch('/api/models/hf/jobs', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }); refreshDownloads(); } catch { /* ignore */ }
+  }
+
+  async function loadExclusivity() {
+    try {
+      const r = await fetch('/api/models/activate');
+      if (!r.ok) return;
+      const d = await r.json();
+      setMultiModel(Boolean(d.multiModel));
+      setCanMultiModel(Boolean(d.canMultiModel));
+    } catch { /* offline */ }
+  }
+
+  async function saveMultiModel(on: boolean) {
+    setMultiModel(on); // optimistic
+    try {
+      const r = await fetch('/api/models/activate', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ multiModel: on }) });
+      if (!r.ok) { setMultiModel(!on); notify('Could not save that', false); return; }
+      notify(on ? 'Keeping multiple models loaded is on' : 'Back to one model at a time');
+    } catch { setMultiModel(!on); notify('Could not save that', false); }
   }
 
   async function loadLocal() {
@@ -401,6 +423,8 @@ export default function SettingsPage() {
   const fitFor = (path: string): ModelFit | undefined => system?.localModels?.find(m => m.path === path)?.fit;
   const recommendedPath = system?.recommended ?? null;
   const hfNum = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n));
+  // Biggest context the running model can take on this machine (from /api/system).
+  const runningMaxCtx = system?.localModels?.find(m => (local?.live.modelPath ?? '') === m.path || local?.live.modelName === m.name)?.maxCtx ?? 0;
 
   const TABS: { id: Tab; label: string }[] = [
     { id: 'profile', label: 'Profile' },
@@ -706,6 +730,19 @@ export default function SettingsPage() {
               {!system && <p style={{ fontSize: 13, color: 'var(--fg-4)', padding: '14px 16px', margin: 0 }}>Checking engines…</p>}
             </div>
 
+            {/* One model at a time vs. several loaded — memory safety for modest rigs */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 20, padding: '14px 16px', background: 'var(--bg-1)', border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', marginBottom: 28 }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', margin: 0 }}>Keep multiple models loaded</p>
+                <p style={{ fontSize: 11.5, color: 'var(--fg-4)', margin: '3px 0 0', lineHeight: 1.5 }}>
+                  {canMultiModel
+                    ? 'Off (recommended): switching engines unloads the previous model first, so two models never fight for memory. On: keep several in memory at once for instant switching.'
+                    : 'Your hardware runs one model at a time. Switching engines automatically unloads the previous model so the new one has room and nothing crashes.'}
+                </p>
+              </div>
+              <Toggle on={multiModel} onChange={canMultiModel ? saveMultiModel : () => notify('Your hardware can only hold one model at a time', false)} />
+            </div>
+
             {/* Local model (llama.cpp) — switch the running model + context size */}
             <SectionLabel>Local model</SectionLabel>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', background: 'var(--bg-1)', border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', marginBottom: 12 }}>
@@ -741,7 +778,7 @@ export default function SettingsPage() {
               </div>
             )}
 
-            <p style={{ fontSize: 12.5, color: 'var(--fg-3)', margin: '0 0 8px', lineHeight: 1.5 }}>Context length — how much the model remembers at once. Bigger uses more memory (VRAM) and runs a little slower.</p>
+            <p style={{ fontSize: 12.5, color: 'var(--fg-3)', margin: '0 0 8px', lineHeight: 1.5 }}>Context length — how much the model remembers at once. Bigger uses more memory and runs a little slower. <strong style={{ color: 'var(--fg-2)' }}>Max</strong> uses everything your hardware can spare.</p>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 22 }}>
               {CTX_PRESETS.map(c => {
                 const active = local?.live.nCtx === c;
@@ -752,6 +789,12 @@ export default function SettingsPage() {
                   </button>
                 );
               })}
+              {runningMaxCtx > 0 && (
+                <button disabled={switching || !local} onClick={() => switchLocal({ ctx: runningMaxCtx })} title={`Maximum your hardware can back: ${fmtCtx(runningMaxCtx)} tokens`}
+                  style={{ padding: '8px 16px', borderRadius: 'var(--r)', fontSize: 13, fontFamily: 'JetBrains Mono, monospace', cursor: switching ? 'default' : 'pointer', border: `1px solid ${local?.live.nCtx === runningMaxCtx ? 'var(--g-bd)' : 'var(--bd)'}`, background: local?.live.nCtx === runningMaxCtx ? 'var(--g-dim)' : 'var(--bg-1)', color: local?.live.nCtx === runningMaxCtx ? 'var(--g-text)' : 'var(--fg-2)', opacity: switching ? 0.5 : 1, transition: 'all .15s' }}>
+                  Max · {fmtCtx(runningMaxCtx)}
+                </button>
+              )}
             </div>
 
             <p style={{ fontSize: 12.5, color: 'var(--fg-3)', margin: '0 0 8px', lineHeight: 1.5 }}>Installed model files — click <strong style={{ color: 'var(--fg-2)' }}>Use</strong> to switch the running model.</p>
@@ -795,8 +838,11 @@ export default function SettingsPage() {
 
             {/* Hugging Face downloader — get a GGUF for llama.cpp with no terminal */}
             <SectionLabel>Download from Hugging Face</SectionLabel>
-            <p style={{ fontSize: 13, color: 'var(--fg-3)', lineHeight: 1.6, margin: '0 0 12px' }}>
+            <p style={{ fontSize: 13, color: 'var(--fg-3)', lineHeight: 1.6, margin: '0 0 6px' }}>
               Search Hugging Face for a GGUF model and download it straight into your models folder. It then appears under <strong style={{ color: 'var(--fg-2)' }}>Local model</strong> above, ready to run with llama.cpp. Each file is tagged for how well it fits your hardware, so you don&apos;t grab one that won&apos;t run.
+            </p>
+            <p style={{ fontSize: 12, color: 'var(--fg-4)', lineHeight: 1.6, margin: '0 0 12px' }}>
+              The file goes from the source straight to your disk. It never routes through us, and once it&apos;s down it runs fully offline. No account, no telemetry, no data broker in the middle.
             </p>
             <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
               <input value={hfQuery} onChange={e => setHfQuery(e.target.value)} placeholder="e.g. qwen3 4b, llama 3.2, gemma" className="inp" style={{ flex: 1 }} onKeyDown={e => e.key === 'Enter' && hfSearch()} />
@@ -827,8 +873,7 @@ export default function SettingsPage() {
                           ) : hfFiles.length === 0 ? (
                             <p style={{ fontSize: 12.5, color: 'var(--fg-4)', padding: '8px 6px' }}>No downloadable GGUF files here.</p>
                           ) : hfFiles.map(f => {
-                            const key = `${repo.id}/${f.path}`;
-                            const downloading = hfDownloading === key;
+                            const active = downloads.find(d => d.repo === repo.id && d.file === f.path && d.status === 'downloading');
                             return (
                               <div key={f.path} style={{ padding: '8px 6px', borderTop: '1px solid var(--bd)' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -839,20 +884,10 @@ export default function SettingsPage() {
                                     </p>
                                     <p style={{ fontSize: 11, color: f.fit?.level === 'too_big' ? 'var(--err)' : 'var(--fg-4)', margin: '2px 0 0', fontFamily: 'JetBrains Mono, monospace' }}>{fmtSize(f.size)}{f.quant ? ` · ${f.quant}` : ''}{f.parts && f.parts.length > 1 ? ` · ${f.parts.length} parts` : ''}{f.fit && f.fit.level !== 'unknown' ? ` · ${f.fit.reason}` : ''}</p>
                                   </div>
-                                  {downloading
-                                    ? <button onClick={() => hfAbort.current?.abort()} className="btn-ghost-sm" style={{ fontSize: 12, padding: '6px 12px', color: 'var(--err)', flexShrink: 0 }}>Cancel</button>
-                                    : <button disabled={!!hfDownloading} onClick={() => hfDownload(repo.id, f.path)} className="btn btn-outline" style={{ fontSize: 12, padding: '6px 14px', flexShrink: 0, opacity: hfDownloading ? 0.4 : 1 }} title={f.fit?.level === 'too_big' ? 'Likely too big for your machine' : undefined}>Download</button>}
+                                  {active
+                                    ? <span style={{ fontSize: 11, color: 'var(--g-text)', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, flexShrink: 0 }}>{active.pct}%</span>
+                                    : <button onClick={() => hfDownload(repo.id, f.path)} className="btn btn-outline" style={{ fontSize: 12, padding: '6px 14px', flexShrink: 0 }} title={f.fit?.level === 'too_big' ? 'Likely too big for your machine' : undefined}>Download</button>}
                                 </div>
-                                {downloading && (
-                                  <div style={{ marginTop: 9 }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: 'var(--fg-4)', marginBottom: 5, fontFamily: 'JetBrains Mono, monospace' }}>
-                                      <span>{hfStatus || 'Working…'}</span>{hfPct !== null && <span>{hfPct}%</span>}
-                                    </div>
-                                    <div style={{ height: 5, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden' }}>
-                                      <div style={{ height: '100%', width: `${hfPct ?? 8}%`, background: 'var(--g)', transition: 'width .3s', opacity: hfPct === null ? 0.5 : 1 }} />
-                                    </div>
-                                  </div>
-                                )}
                               </div>
                             );
                           })}
@@ -861,6 +896,40 @@ export default function SettingsPage() {
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {downloads.length > 0 && (
+              <div style={{ marginTop: 18 }}>
+                <SectionLabel>Downloads</SectionLabel>
+                <p style={{ fontSize: 12, color: 'var(--fg-4)', margin: '0 0 10px', lineHeight: 1.5 }}>These run on the server, so they keep going if you close this page or the app.</p>
+                <div style={{ border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+                  {downloads.map(d => {
+                    const active = d.status === 'downloading';
+                    const eta = d.etaSec != null && d.etaSec > 0 ? (d.etaSec >= 60 ? `${Math.floor(d.etaSec / 60)}m ${d.etaSec % 60}s` : `${d.etaSec}s`) : '';
+                    const statusColor = d.status === 'done' ? 'var(--g-text)' : d.status === 'error' ? 'var(--err)' : 'var(--fg-4)';
+                    return (
+                      <div key={d.id} style={{ padding: '11px 16px', borderBottom: '1px solid var(--bd)', background: 'var(--bg-1)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <p style={{ fontSize: 12.5, color: 'var(--fg)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</p>
+                            <p style={{ fontSize: 11, color: statusColor, margin: '2px 0 0', fontFamily: 'JetBrains Mono, monospace' }}>
+                              {active
+                                ? `${fmtSize(d.downloaded)} / ${fmtSize(d.total)}${d.speedBps > 0 ? ` · ${fmtSize(d.speedBps)}/s` : ''}${eta ? ` · ${eta} left` : ''}`
+                                : d.status === 'done' ? `Done · ${fmtSize(d.total)}` : d.status === 'error' ? (d.error ?? 'Failed') : 'Cancelled'}
+                            </p>
+                          </div>
+                          <button onClick={() => hfCancelJob(d.id)} className="btn-ghost-sm" style={{ fontSize: 12, padding: '5px 10px', color: active ? 'var(--err)' : 'var(--fg-4)', flexShrink: 0 }}>{active ? 'Cancel' : 'Dismiss'}</button>
+                        </div>
+                        {active && (
+                          <div style={{ height: 5, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden', marginTop: 9 }}>
+                            <div style={{ height: '100%', width: `${d.pct}%`, background: 'var(--g)', transition: 'width .4s' }} />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
@@ -953,7 +1022,7 @@ export default function SettingsPage() {
 
             <div style={{ padding: '16px 20px', background: 'var(--bg-1)', border: '1px solid var(--bd)', borderRadius: 'var(--r-md)' }}>
               <SectionLabel>About</SectionLabel>
-              {[['Version', '2.3.0'], ['Stack', 'Next.js · SQLite · llama.cpp'], ['Privacy', 'Self-hosted · no telemetry'], ['Inference', 'llama.cpp · Ollama · LM Studio · optional API keys']].map(([k, v]) => (
+              {[['Version', '2.4.0'], ['Stack', 'Next.js · SQLite · llama.cpp'], ['Privacy', 'Self-hosted · no telemetry'], ['Inference', 'llama.cpp · Ollama · LM Studio · optional API keys']].map(([k, v]) => (
                 <div key={k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                   <span style={{ fontSize: 12, color: 'var(--fg-4)', fontFamily: 'JetBrains Mono, monospace' }}>{k}</span>
                   <span style={{ fontSize: 12, color: k === 'Privacy' || k === 'Inference' ? 'var(--ok)' : 'var(--fg-2)', fontFamily: 'JetBrains Mono, monospace', fontWeight: k === 'Privacy' || k === 'Inference' ? 600 : 400 }}>{v}</span>

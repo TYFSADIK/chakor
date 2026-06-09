@@ -22,6 +22,7 @@ type User   = { id: number; name?: string | null; email?: string | null; isAdmin
 type Doc    = { id: number; filename: string; mime_type: string | null; size_bytes: number | null; created_at: number };
 type Model  = { id: string; name: string; provider: string; contextWindow: number; badge?: string; vision?: boolean };
 type Engine = { id: string; label: string; running: boolean; modelCount: number; detail: string; crashed?: boolean };
+type DownloadJob = { id: string; name: string; status: 'downloading'|'done'|'error'|'cancelled'; total: number; downloaded: number; pct: number; speedBps: number; etaSec: number|null; error: string|null };
 type Toast  = { id: number; msg: string; ok: boolean };
 type Prompt = { id: number; title: string; body: string; created_at: number };
 type ToolInfo = { name: string; description: string };
@@ -326,6 +327,57 @@ function ContextControl({ model, localLive, isAdmin, ctxChoice, onChoose }: {
               })}
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Background downloads indicator ───────────────────────────
+// Model downloads run on the server, so this little chip shows their progress
+// from anywhere in the app and lets you cancel without going to Settings.
+function DownloadsButton({ jobs, onCancel }: { jobs: DownloadJob[]; onCancel: (id:string)=>void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(()=>{
+    if(!open) return;
+    const h=(e:MouseEvent)=>{if(ref.current&&!ref.current.contains(e.target as Node))setOpen(false);};
+    document.addEventListener('mousedown',h); return()=>document.removeEventListener('mousedown',h);
+  },[open]);
+  const active = jobs.filter(j=>j.status==='downloading');
+  if (active.length===0) return null;
+  const avg = Math.round(active.reduce((n,j)=>n+j.pct,0)/active.length);
+  return (
+    <div ref={ref} style={{position:'relative'}}>
+      <button onClick={()=>setOpen(o=>!o)} className="btn-ghost-sm" title="Model downloads"
+        style={{gap:7, background: open ? 'var(--bg-2)' : 'transparent'}}>
+        <span style={{width:13,height:13,border:'2px solid var(--g)',borderTopColor:'transparent',borderRadius:'50%',animation:'spin .8s linear infinite',display:'inline-block'}}/>
+        <span style={{fontSize:12,fontWeight:500,color:'var(--fg-3)',fontFamily:'JetBrains Mono,monospace'}}>{active.length>1?`${active.length} · `:''}{avg}%</span>
+      </button>
+      {open && (
+        <div className="anim-scale-in" style={{position:'absolute',top:'calc(100% + 6px)',right:0,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:10,boxShadow:'var(--sh-lg)',width:284,overflow:'hidden'}}>
+          <div style={{padding:'10px 14px 8px'}}>
+            <p style={{fontSize:12,fontWeight:600,color:'var(--fg)',margin:0}}>Downloading models</p>
+            <p style={{fontSize:11,color:'var(--fg-4)',margin:'3px 0 0',lineHeight:1.5}}>Runs on the server. Safe to close this tab.</p>
+          </div>
+          <div style={{padding:'2px 10px 10px'}}>
+            {active.map(j=>{
+              const eta = j.etaSec!=null&&j.etaSec>0 ? (j.etaSec>=60?`${Math.floor(j.etaSec/60)}m ${j.etaSec%60}s`:`${j.etaSec}s`) : '';
+              return (
+                <div key={j.id} style={{padding:'8px 4px'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
+                    <span style={{flex:1,minWidth:0,fontSize:12,color:'var(--fg-2)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{j.name}</span>
+                    <span style={{fontSize:11,color:'var(--g-text)',fontFamily:'JetBrains Mono,monospace',flexShrink:0}}>{j.pct}%</span>
+                    <button onClick={()=>onCancel(j.id)} title="Cancel" className="btn-ghost-sm" style={{padding:'2px 6px',fontSize:11,color:'var(--err)',flexShrink:0}}>✕</button>
+                  </div>
+                  <div style={{height:4,background:'var(--bg-3)',borderRadius:3,overflow:'hidden'}}>
+                    <div style={{height:'100%',width:`${j.pct}%`,background:'var(--g)',transition:'width .4s'}}/>
+                  </div>
+                  <p style={{fontSize:10,color:'var(--fg-4)',margin:'4px 0 0',fontFamily:'JetBrains Mono,monospace'}}>{fmtBytes(j.downloaded)} / {fmtBytes(j.total)}{j.speedBps>0?` · ${fmtBytes(j.speedBps)}/s`:''}{eta?` · ${eta} left`:''}</p>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
@@ -685,6 +737,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   const [modelDetails, setModelDetails] = useState<Record<string,{parameterSize?:string|null;quantization?:string|null}>>({});
   const [localLive, setLocalLive] = useState<LocalLive|null>(null);
   const [engines, setEngines] = useState<Engine[]>([]);
+  const [downloads, setDownloads] = useState<DownloadJob[]>([]);
   const [ctxChoice, setCtxChoice] = useState<number|null>(null);
   const [themeOpen, setThemeOpen] = useState(false);
   const tts = useTextToSpeech();
@@ -717,6 +770,11 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   useEffect(()=>{ fetch('/api/folders').then(r=>r.json()).then((f:Folder[])=>setFolders(Array.isArray(f)?f:[])).catch(()=>{}); },[]);
   useEffect(()=>{ fetch('/api/tools').then(r=>r.json()).then((t:ToolInfo[])=>setToolList(Array.isArray(t)?t:[])).catch(()=>{}); },[]);
   useEffect(()=>{ refreshLoaded(); refreshLocal(); // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+  // Poll background model downloads so the header chip keeps moving. Admin only
+  // (the jobs route is gated), light enough for a self-host.
+  useEffect(()=>{ if(!user.isAdmin) return; refreshDownloads(); const id=setInterval(refreshDownloads,3000); return ()=>clearInterval(id);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
   useEffect(()=>{ const c=localStorage.getItem('chakor-context-size'); if(c) setCtxChoice(Number(c)||null); },[]);
   useEffect(()=>{ if(ctxChoice) localStorage.setItem('chakor-context-size',String(ctxChoice)); else localStorage.removeItem('chakor-context-size'); },[ctxChoice]);
@@ -785,6 +843,30 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   async function refreshLoaded() { try { const r=await fetch('/api/models/loaded'); const d=await r.json(); if(Array.isArray(d.models)) setLoadedNames(new Set((d.models as {name:string}[]).map(m=>m.name))); } catch {} }
   async function refreshLocal() { try { const r=await fetch('/api/models/local'); if(r.ok){ const d=await r.json(); if(d?.live) setLocalLive(d.live); } } catch {} }
   async function refreshEngines() { try { const r=await fetch('/api/system'); if(r.ok){ const d=await r.json(); if(Array.isArray(d.engines)) setEngines(d.engines); } } catch {} }
+  async function refreshDownloads() { if(!user.isAdmin) return; try { const r=await fetch('/api/models/hf/jobs'); if(r.ok){ const d=await r.json(); if(Array.isArray(d.jobs)) setDownloads(d.jobs); } } catch {} }
+  async function cancelDownload(id:string) { try { await fetch('/api/models/hf/jobs',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}); refreshDownloads(); } catch {} }
+  // Switching to a model on a different local engine: tell the server so it frees
+  // the previous one first (unless multi-model is on). Keeps a modest GPU from OOM.
+  async function selectModel(id:string) {
+    const prev=models.find(m=>m.id===modelId);
+    setModelId(id);
+    const next=models.find(m=>m.id===id);
+    if(!user.isAdmin||!next||!['llama','ollama','lmstudio'].includes(next.provider)) return;
+    if(prev&&prev.provider===next.provider) return; // same engine, nothing to free
+    try {
+      const r=await fetch('/api/models/activate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({modelId:id})});
+      if(!r.ok) return;
+      const d=await r.json();
+      const label=ENGINE_LABEL[next.provider]??next.provider;
+      if(d.exclusive){
+        const bits:string[]=[];
+        if(Array.isArray(d.freed)&&d.freed.length) bits.push(`freed ${d.freed.join(', ')}`);
+        if(d.llamaStarted) bits.push('starting it up');
+        toast(bits.length?`Switched to ${label} — ${bits.join(', ')}`:`Switched to ${label}`);
+      }
+      refreshEngines();
+    } catch {}
+  }
   async function fetchModelDetails(names:string[]) {
     const missing=names.filter(n=>!(n in modelDetails));
     if(!missing.length) return;
@@ -1065,7 +1147,8 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
           </div>
 
           <div style={{display:'flex',alignItems:'center',gap:4,flexShrink:0}}>
-            <ModelSelect models={models} selected={modelId} onChange={setModelId}
+            <DownloadsButton jobs={downloads} onCancel={cancelDownload}/>
+            <ModelSelect models={models} selected={modelId} onChange={selectModel}
               loadedNames={loadedNames} details={modelDetails} isAdmin={!!user.isAdmin}
               onToggleLoad={toggleLoad} onOpenChange={onModelMenuOpen} localName={localLive?.modelName} engines={engines}/>
             <ContextControl model={curModel} localLive={localLive} isAdmin={!!user.isAdmin}
