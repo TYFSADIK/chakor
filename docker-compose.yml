@@ -1,0 +1,48 @@
+# The easy way to run this on any OS.
+#
+#   docker compose up -d
+#
+# Then open http://localhost:3001 and register (first account is the admin).
+# Your data lives in the "chakor-data" volume and survives restarts.
+#
+# Want a local model bundled too? Start with the ollama profile:
+#
+#   docker compose --profile ollama up -d
+#   docker compose exec ollama ollama pull llama3.2
+#
+# Any values you set in .env.local override the defaults below.
+
+services:
+  app:
+    build: .
+    image: chakor:latest
+    container_name: chakor
+    ports:
+      - "3001:3001"
+    environment:
+      AUTH_URL: ${AUTH_URL:-http://localhost:3001}
+      REGISTRATION_MODE: ${REGISTRATION_MODE:-open}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      # API keys are optional. Set them in .env.local to enable cloud models.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    volumes:
+      - chakor-data:/data
+    restart: unless-stopped
+
+  # Optional local model runner. Enable with:  --profile ollama
+  ollama:
+    image: ollama/ollama:latest
+    container_name: chakor-ollama
+    profiles: ["ollama"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  chakor-data:
+  ollama-data:

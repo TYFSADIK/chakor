@@ -1,0 +1,40 @@
+{
+  "name": "chakor",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3001",
+    "build": "next build",
+    "start": "next start -p 3001 -H 0.0.0.0",
+    "init-db": "node scripts/init-db.mjs"
+  },
+  "dependencies": {
+    "@auth/core": "0.37.4",
+    "bcryptjs": "2.4.3",
+    "better-sqlite3": "11.5.0",
+    "highlight.js": "11.10.0",
+    "next": "15.0.3",
+    "next-auth": "5.0.0-beta.25",
+    "pdf-parse": "^2.4.5",
+    "react": "19.0.0-rc-66855b96-20241106",
+    "react-dom": "19.0.0-rc-66855b96-20241106",
+    "react-markdown": "9.0.1",
+    "rehype-highlight": "7.0.1",
+    "remark-gfm": "4.0.0",
+    "zod": "3.23.8"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "2.4.6",
+    "@types/better-sqlite3": "7.6.11",
+    "@types/node": "22.9.0",
+    "@types/pdf-parse": "^1.1.5",
+    "@types/react": "18.3.12",
+    "@types/react-dom": "18.3.1",
+    "autoprefixer": "10.4.20",
+    "eslint": "9.14.0",
+    "eslint-config-next": "15.0.3",
+    "postcss": "8.4.47",
+    "tailwindcss": "3.4.14",
+    "typescript": "5.6.3"
+  }
+}

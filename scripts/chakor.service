@@ -1,0 +1,19 @@
+[Unit]
+Description=Chakor (app + local model)
+After=network.target
+
+[Service]
+User=ai
+WorkingDirectory=/home/ai/chakor
+Environment=NODE_ENV=production
+EnvironmentFile=/home/ai/chakor/.env.local
+# Chakor runs llama-server itself, so this one unit is the whole stack.
+# NVIDIA only: uncomment to clear a wedged CUDA/UVM state before start (runs as root).
+#ExecStartPre=+/bin/sh -c 'modprobe -r nvidia_uvm 2>/dev/null || true; modprobe nvidia_uvm || true'
+ExecStart=/usr/bin/node /home/ai/chakor/node_modules/next/dist/bin/next start -p 3001 -H 127.0.0.1
+Restart=always
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
