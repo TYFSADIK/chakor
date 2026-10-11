@@ -1,5 +1,28 @@
 import type { ModelEndpoint } from './models';
+import { logger, errText } from './logger';
 export type { ModelEndpoint };
+
+const STREAM_IDLE_MS = 120_000;
+
+/**
+ * Idle watchdog for streaming inference calls: aborts if no bytes arrive for
+ * `ms`, and is reset on every chunk. This is NOT a total timeout — legitimately
+ * long generations keep resetting it. The caller's signal is combined in via
+ * AbortSignal.any so client aborts still propagate.
+ */
+export function idleWatchdog(caller: AbortSignal | undefined, ms = STREAM_IDLE_MS) {
+  const ctrl = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const reset = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => ctrl.abort(new Error(`No data for ${ms / 1000}s — connection stalled.`)), ms);
+    timer.unref?.();
+  };
+  reset();
+  const signal = caller ? AbortSignal.any([caller, ctrl.signal]) : ctrl.signal;
+  const done = () => { if (timer) clearTimeout(timer); };
+  return { signal, reset, done };
+}
 
 /**
  * A piece of message content. Plain text uses the string form of ChatMessage;
@@ -65,15 +88,26 @@ export async function* streamChat(opts: ChatOptions): AsyncGenerator<string> {
     max_tokens: opts.max_tokens ?? 8192,
   };
 
-  const res = await fetch(`${opts.model.url}/v1/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: opts.signal,
-  });
+  const wd = idleWatchdog(opts.signal);
+
+  let res: Response;
+  try {
+    res = await fetch(`${opts.model.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: wd.signal,
+    });
+  } catch (e) {
+    wd.done();
+    logger.warn('llama.cpp chat request failed', { endpoint: opts.model.url, err: errText(e) });
+    throw e;
+  }
 
   if (!res.ok || !res.body) {
+    wd.done();
     const text = await res.text().catch(() => '');
+    logger.warn('llama.cpp chat HTTP error', { endpoint: opts.model.url, status: res.status });
     throw new Error(`llama.cpp error ${res.status}: ${text.slice(0, 300)}`);
   }
 
@@ -85,6 +119,7 @@ export async function* streamChat(opts: ChatOptions): AsyncGenerator<string> {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      wd.reset();
       buffer += decoder.decode(value, { stream: true });
 
       // SSE events are separated by \n\n
@@ -116,6 +151,7 @@ export async function* streamChat(opts: ChatOptions): AsyncGenerator<string> {
       }
     }
   } finally {
+    wd.done();
     reader.releaseLock();
   }
 }

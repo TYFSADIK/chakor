@@ -27,7 +27,28 @@ export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
   if (!body || !Array.isArray(body.messages)) return err('messages array required', 400);
 
+  // Shape + size caps (S9): registered keys can otherwise burn cloud quota with
+  // unbounded payloads. Content may be a string or a parts array (vision), so
+  // accept both and measure the text parts.
+  const MAX_MESSAGES = 100;
+  const MAX_TOTAL_CHARS = 20_000;
   const messages = body.messages as ChatMessage[];
+  if (messages.length > MAX_MESSAGES) return err(`too many messages (max ${MAX_MESSAGES})`, 400);
+  let totalChars = 0;
+  for (const m of messages) {
+    const c = (m as { content?: unknown })?.content;
+    if (typeof (m as { role?: unknown })?.role !== 'string') {
+      return err('each message must have a string role', 400);
+    }
+    if (typeof c === 'string') totalChars += c.length;
+    else if (Array.isArray(c)) {
+      for (const p of c) {
+        if (typeof p?.text === 'string') totalChars += p.text.length;
+      }
+    } else return err('each message must have string content or a content-parts array', 400);
+  }
+  if (totalChars > MAX_TOTAL_CHARS) return err(`total message content too large (max ${MAX_TOTAL_CHARS} chars)`, 400);
+
   const modelId: string | undefined = body.model;
   const wantStream = body.stream === true;
 
@@ -49,7 +70,10 @@ export async function POST(req: NextRequest) {
   try {
     deltas = streamForModel({ modelId, messages, system, signal: req.signal });
   } catch (e) {
-    return err(e instanceof Error ? e.message : 'model error', 500);
+    // Do not pass raw error messages to API clients — they can contain
+    // internal endpoints or paths. Detail stays in the server log.
+    console.error('v1/chat/completions model error:', e);
+    return err('The model failed to respond', 500);
   }
 
   if (!wantStream) {
@@ -57,7 +81,8 @@ export async function POST(req: NextRequest) {
     try {
       for await (const d of deltas) content += d;
     } catch (e) {
-      return err(e instanceof Error ? e.message : 'stream error', 500);
+      console.error('v1/chat/completions stream error:', e);
+      return err('The model failed to respond', 500);
     }
     return new Response(
       JSON.stringify({
@@ -86,7 +111,10 @@ export async function POST(req: NextRequest) {
         chunk({}, 'stop');
       } catch (e) {
         const isAbort = e instanceof Error && (e.name === 'AbortError' || e.message.includes('aborted'));
-        if (!isAbort) send({ error: { message: e instanceof Error ? e.message : 'stream error' } });
+        if (!isAbort) {
+          console.error('v1/chat/completions stream error:', e);
+          send({ error: { message: 'The model failed to respond' } });
+        }
       } finally {
         controller.enqueue(encoder.encode('data: [DONE]\n\n'));
         controller.close();

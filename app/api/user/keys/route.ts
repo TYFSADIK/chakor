@@ -18,7 +18,7 @@ export async function GET() {
   const keys = listApiKeys(uid).map((k) => ({
     id: k.id,
     name: k.name,
-    masked: maskToken(k.token),
+    masked: maskToken(k.token_tail ?? ''),
     created_at: k.created_at,
     last_used: k.last_used,
   }));

@@ -1,5 +1,137 @@
 # Changelog
 
+## 2.7
+
+Agent Workspace: the assistant can now create real files in a sandboxed
+workspace.
+
+Agent loop
+- New ReAct agent (`lib/agent-executor.ts`) with a 15-step tool loop: the
+  model emits XML tool calls, results stream back as observations, and the
+  final answer lands in the chat as a normal assistant message.
+- Tool-call parser tolerates small-model output quirks (missing tags, raw
+  JSON forms, truncated or trailing-comma JSON) and asks the agent to retry
+  with a concrete example when a call is unrecoverable.
+- Tools (`lib/workspace-tools.ts`, zod-validated): write_file, read_file,
+  execute_python, list_files, web_search (existing SearXNG), generate_docx
+  and generate_pptx (python-docx / python-pptx from the project venv).
+
+Sandbox and security
+- Python runs only through `scripts/sandbox-runner.py`: subprocess with
+  30-second CPU/wall timeout, 512MB address-space limit, isolated cwd/HOME,
+  no bytecode writes. NPROC limit scales from current thread count so BLAS
+  thread pools do not break under a fixed cap.
+- Every file path resolves against `data/workspaces/{conversationId}` and
+  escapes are rejected, in tools and in the API routes.
+- All new routes require a session and verify conversation ownership;
+  download/delete reject names with slashes or leading dots; 50MB download
+  cap; 10MB per file and 100 files per workspace in tools.
+
+UI
+- New `AgentWorkspace` panel beside the chat (bottom sheet on mobile):
+  Agent Mode toggle, live activity log with plain-language steps, file list
+  with download/delete, collapsible to a rail, state persisted.
+- Chat input routes to the agent while Agent Mode is on; the placeholder
+  changes to "Tell the agent what to create...".
+
+Notes
+- Agent chat turns are not persisted to the database; files in the workspace
+  persist until deleted.
+- Python dependencies live in `.venv` (python-docx, python-pptx, matplotlib,
+  pandas, numpy, openpyxl, Pillow).
+
+## 2.6
+
+Smarter answers: honest context handling and a real deep-research pipeline.
+
+Deep Research
+- Deep Research is now a pipeline, not a single search: the selected model
+  plans 4 distinct search angles, all angles are searched in parallel, sources
+  are ranked by cross-query consensus, the top 6 pages are read in full
+  (SSRF-protected fetch, shared with the `fetch_url` tool), and the model
+  synthesizes from full page text — up to 24 cited sources instead of 20
+  snippets.
+- Research progress streams into the chat as tool chips (plan, search, pages
+  read) so the work is visible while it happens.
+- Research synthesis runs at lower temperature (0.4) for factual grounding.
+
+Context handling
+- History is now always trimmed to a budget — the UI's context choice, else the
+  model's declared window, else a safe 8192 default. Previously an unset
+  control meant no trimming at all, so long chats silently overflowed.
+- The tool-calling agent loop trims its history too (it was untrimmed).
+- Ollama gets an explicit `num_ctx` even when the UI control is unset.
+
+Internals
+- `lib/safe-fetch.ts`: the redirect-validated, blocklist-enforced page fetcher,
+  now shared by the `fetch_url` tool and Deep Research (was duplicated).
+- `lib/research.ts`: planning, consensus ranking, page reading, context
+  assembly — with 12 new unit tests (44 total).
+
+## 2.5
+
+Production hardening pass: security, reliability, and a full audit.
+
+Security
+- Dependency CVEs cleared: Next.js 15.0.3 → 15.5.23 (SSRF, server-function
+  disclosure), React RC → 19.2.8 stable, next-auth beta.32, postcss/sharp
+  overrides. `npm audit` reports zero vulnerabilities.
+- llama-server now binds 127.0.0.1 by default (it has no auth of its own).
+  Set `LLAMA_HOST=0.0.0.0` only if you deliberately serve the raw model to the LAN.
+- `REGISTRATION_MODE=invite` is now actually enforced server-side (it was never
+  checked), with an invite field on the register form.
+- Rate limiting: login (per username) and registration (per IP).
+- Login timing equalized (no username enumeration via response time), and
+  deleted users lose session identity immediately instead of at JWT expiry.
+- `/v1` API tokens are stored as SHA-256 hashes, not plaintext.
+- The `fetch_url` tool re-validates every redirect hop against the private-host
+  blocklist (a public URL 302ing to 169.254.169.254 no longer bypasses it) and
+  unwraps IPv4-mapped IPv6.
+- Share links are 128-bit slugs (was 40-bit).
+- Security headers everywhere: CSP, X-Frame-Options, nosniff, Referrer-Policy,
+  Permissions-Policy. Browser-side connections restricted to this origin.
+- Source cards no longer load favicons from Google (searched domains stayed on
+  the wire) — a local letter chip replaces them.
+- Input caps on the /v1 completions endpoint; internal error details no longer
+  leak to API clients (generic messages out, real errors in the server log).
+
+Reliability
+- Supervisor: a missing llama-server binary no longer reports "running" forever;
+  restart races and the port-conflict "model too large" misdiagnosis are fixed;
+  backoff actually backs off now.
+- Switching engines never kills an in-flight chat stream anymore.
+- Cold-start-after-switch waits for the model to be healthy instead of erroring 503.
+- All inference streams get a 120s idle watchdog (a wedged server can't hang a
+  request forever); the agent loop gets total timeouts.
+- Downloads: stall watchdog, disk-space preflight, failed jobs no longer
+  advertise a path that doesn't exist.
+- Structured JSON logging (lib/logger) with secret redaction across backend
+  failure paths.
+- Chat UI: streams can't write into the wrong conversation after a mid-stream
+  switch; conversation loads are race-free; failed mutations roll back with a
+  toast; destructive actions confirm; forms surface network errors instead of
+  spinning forever.
+- Database: first-user admin race closed, imports are atomic, tokens migrate to
+  hashed storage automatically, indexes added (documents, folder_id, message
+  timestamps), admin user list no longer cartesian-joins.
+
+Frontend
+- Streaming re-renders memoized (no full-tree markdown re-parse per token) and
+  auto-scroll throttled.
+- Accessibility: aria-labels on icon buttons, keyboard-visible action rows,
+  Escape closes panels, dialog semantics, label associations on auth forms.
+- The share page renders with its intended theme again (missing Tailwind
+  tokens), the Appearance text-size setting actually works, and error/404
+  pages exist app-wide.
+
+Operations
+- `GET /api/health` for uptime monitors (public, minimal).
+- Docker: runs as non-root, HEALTHCHECK included, Ollama bound to localhost,
+  model downloads land in the data volume.
+- Tests: `npm test` (vitest, 32 tests) plus `node scripts/smoke-test.mjs` for
+  live end-to-end checks. `npm run typecheck`, flat ESLint config.
+- systemd unit no longer fails when `.env.local` is absent.
+
 ## 2.4.1
 
 A real installer, so the public can run one command and walk away.

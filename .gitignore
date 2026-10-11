@@ -46,3 +46,7 @@ yarn-error.log*
 
 # Build cache
 *.tsbuildinfo
+/.next-staging
+/.next-old
+/.venv
+/data/workspaces

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
 import { signOut } from 'next-auth/react';
 import Link from 'next/link';
 import ReactMarkdown from 'react-markdown';
@@ -10,6 +10,7 @@ import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { useTextToSpeech } from '@/hooks/useTextToSpeech';
 import { ChakorMark } from './LoginForm';
 import ThemeEditor from './ThemeEditor';
+import AgentWorkspace, { type AgentWorkspaceHandle } from './AgentWorkspace';
 import { APP } from '@/lib/config';
 
 // ─── Types ────────────────────────────────────────────────────
@@ -78,7 +79,7 @@ const Ico = {
 };
 
 // ─── Code block ───────────────────────────────────────────────
-function CodeBlock({ children }: { children: React.ReactNode }) {
+const CodeBlock = memo(function CodeBlock({ children }: { children: React.ReactNode }) {
   const [copied, setCopied] = useState(false);
   const ref = useRef<HTMLPreElement>(null);
   let lang = '';
@@ -95,15 +96,15 @@ function CodeBlock({ children }: { children: React.ReactNode }) {
       <pre ref={ref}>{children}</pre>
     </div>
   );
-}
+});
 
 // ─── Typing indicator ─────────────────────────────────────────
-function Typing() {
+const Typing = memo(function Typing() {
   return <div style={{display:'flex',alignItems:'center',gap:5,padding:'4px 0'}}><div className="dot dot-1"/><div className="dot dot-2"/><div className="dot dot-3"/></div>;
-}
+});
 
 // ─── Source cards ─────────────────────────────────────────────
-function SourceCards({ sources }: { sources: Source[] }) {
+const SourceCards = memo(function SourceCards({ sources }: { sources: Source[] }) {
   if (!sources.length) return null;
   return (
     <div style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:8,marginBottom:14,scrollbarWidth:'none'}}>
@@ -112,8 +113,9 @@ function SourceCards({ sources }: { sources: Source[] }) {
         return (
           <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="src" style={{flexShrink:0,width:176,padding:12,display:'block',textDecoration:'none'}}>
             <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:6}}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={`https://www.google.com/s2/favicons?sz=16&domain=${domain}`} alt="" style={{width:12,height:12,borderRadius:2,opacity:.7,flexShrink:0}}/>
+              {/* Local letter chip — no third-party favicon service, so searched
+                  domains are never leaked off this machine. */}
+              <span aria-hidden="true" style={{width:14,height:14,borderRadius:0,background:'var(--g-dim)',border:'1px solid var(--g-bd)',color:'var(--g-text)',fontSize:9,fontWeight:700,display:'inline-flex',alignItems:'center',justifyContent:'center',flexShrink:0,textTransform:'uppercase'}}>{domain.charAt(0)||'?'}</span>
               <span style={{fontSize:11,color:'var(--fg-4)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontFamily:'JetBrains Mono,monospace'}}>{domain}</span>
               <span style={{marginLeft:'auto',fontSize:10,color:'var(--fg-4)',flexShrink:0,fontFamily:'JetBrains Mono,monospace'}}>[{i+1}]</span>
             </div>
@@ -123,10 +125,10 @@ function SourceCards({ sources }: { sources: Source[] }) {
       })}
     </div>
   );
-}
+});
 
 // ─── Tool-use chips ───────────────────────────────────────────
-function ToolChips({ events }: { events: ToolEvt[] }) {
+const ToolChips = memo(function ToolChips({ events }: { events: ToolEvt[] }) {
   const [open, setOpen] = useState<number|null>(null);
   if(!events.length) return null;
   return (
@@ -134,20 +136,20 @@ function ToolChips({ events }: { events: ToolEvt[] }) {
       <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
         {events.map((e,i)=>(
           <button key={i} onClick={()=>setOpen(open===i?null:i)}
-            style={{display:'inline-flex',alignItems:'center',gap:5,padding:'4px 9px',borderRadius:20,fontSize:11.5,fontFamily:'JetBrains Mono,monospace',cursor:'pointer',border:`1px solid ${open===i?'var(--g)':'var(--g-bd)'}`,background:'var(--g-dim)',color:'var(--g-text)'}}>
+            style={{display:'inline-flex',alignItems:'center',gap:5,padding:'4px 9px',borderRadius:0,fontSize:11.5,fontFamily:'JetBrains Mono,monospace',cursor:'pointer',border:`1px solid ${open===i?'var(--g)':'var(--g-bd)'}`,background:'var(--g-dim)',color:'var(--g-text)'}}>
             <Ico.Tool/> {e.name}
           </button>
         ))}
       </div>
       {open!==null && events[open] && (
-        <div style={{background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:8,padding:'8px 11px',fontSize:11.5,fontFamily:'JetBrains Mono,monospace',color:'var(--fg-3)',whiteSpace:'pre-wrap',maxHeight:170,overflowY:'auto'}}>
+        <div style={{background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:0,padding:'8px 11px',fontSize:11.5,fontFamily:'JetBrains Mono,monospace',color:'var(--fg-3)',whiteSpace:'pre-wrap',maxHeight:170,overflowY:'auto'}}>
           <div style={{color:'var(--fg-4)',marginBottom:4}}>args: {events[open].args||'{}'}</div>
           {events[open].result.slice(0,1000)}
         </div>
       )}
     </div>
   );
-}
+});
 
 // ─── Model dropdown ───────────────────────────────────────────
 type ModelDetail = { parameterSize?: string|null; quantization?: string|null };
@@ -185,7 +187,7 @@ function ModelSelect({ models, selected, onChange, loadedNames, details, isAdmin
         <Ico.Down/>
       </button>
       {open && (
-        <div className="anim-scale-in" style={{position:'absolute',top:'calc(100% + 6px)',left:0,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:10,boxShadow:'var(--sh-lg)',minWidth:252,maxWidth:300,overflow:'hidden'}}>
+        <div className="anim-scale-in" style={{position:'absolute',top:'calc(100% + 6px)',left:0,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:0,boxShadow:'var(--sh-lg)',minWidth:252,maxWidth:300,overflow:'hidden'}}>
           {engines.length>0 && (
             <div style={{padding:'9px 11px 10px',borderBottom:'1px solid var(--bd-2)',background:'var(--bg-1)'}}>
               <div style={{fontSize:9.5,fontWeight:600,color:'var(--fg-4)',textTransform:'uppercase',letterSpacing:'0.08em',fontFamily:'JetBrains Mono,monospace',marginBottom:7}}>Engine</div>
@@ -197,7 +199,7 @@ function ModelSelect({ models, selected, onChange, loadedNames, details, isAdmin
                   return (
                     <button key={e.id} disabled={!canUse} title={e.detail}
                       onClick={()=>{ if(canUse&&mid){onChange(mid);setOpen(false);} }}
-                      style={{display:'flex',alignItems:'center',gap:6,fontSize:11.5,padding:'5px 9px',borderRadius:'var(--r)',fontFamily:'Inter,sans-serif',
+                      style={{display:'flex',alignItems:'center',gap:6,fontSize:11.5,padding:'5px 9px',borderRadius:'var(--r)',fontFamily:'Newsreader,Georgia,serif',
                         border:`1px solid ${isCur?'var(--g-bd)':'var(--bd-2)'}`,
                         background:isCur?'var(--g-dim)':'transparent',
                         color:isCur?'var(--g-text)':e.running?'var(--fg-2)':'var(--fg-4)',
@@ -229,7 +231,7 @@ function ModelSelect({ models, selected, onChange, loadedNames, details, isAdmin
                   return (
                     <div key={m.id} style={{display:'flex',alignItems:'center',background:m.id===selected?'var(--bg-3)':'transparent'}}>
                       <button onClick={()=>{onChange(m.id);setOpen(false);}}
-                        style={{flex:1,minWidth:0,display:'flex',alignItems:'center',justifyContent:'space-between',padding:'9px 14px',fontSize:13,color:m.id===selected?'var(--fg)':'var(--fg-2)',background:'transparent',border:'none',cursor:'pointer',fontFamily:'Inter,sans-serif',gap:8,textAlign:'left',transition:'background .1s'}}
+                        style={{flex:1,minWidth:0,display:'flex',alignItems:'center',justifyContent:'space-between',padding:'9px 14px',fontSize:13,color:m.id===selected?'var(--fg)':'var(--fg-2)',background:'transparent',border:'none',cursor:'pointer',fontFamily:'Newsreader,Georgia,serif',gap:8,textAlign:'left',transition:'background .1s'}}
                         onMouseEnter={e=>{if(m.id!==selected)(e.currentTarget as HTMLElement).style.background='var(--bg-3)';}}
                         onMouseLeave={e=>{if(m.id!==selected)(e.currentTarget as HTMLElement).style.background='transparent';}}>
                         <span style={{display:'flex',alignItems:'center',gap:7,minWidth:0}}>
@@ -289,13 +291,13 @@ function ContextControl({ model, localLive, isAdmin, ctxChoice, onChoose }: {
 
   return (
     <div ref={ref} style={{position:'relative'}}>
-      <button onClick={()=>setOpen(o=>!o)} className="btn-ghost-sm" title="Context length — how much the model remembers"
+      <button onClick={()=>setOpen(o=>!o)} className="btn-ghost-sm" title="Context length: how much the model remembers"
         style={{gap:5, background: open ? 'var(--bg-2)' : 'transparent'}}>
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 6h16M4 12h10M4 18h7"/></svg>
         <span style={{fontSize:12.5,fontWeight:500,color:'var(--fg-3)',fontFamily:'JetBrains Mono,monospace'}}>{label}</span>
       </button>
       {open && (
-        <div className="anim-scale-in" style={{position:'absolute',top:'calc(100% + 6px)',right:0,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:10,boxShadow:'var(--sh-lg)',width:248,overflow:'hidden'}}>
+        <div className="anim-scale-in" style={{position:'absolute',top:'calc(100% + 6px)',right:0,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:0,boxShadow:'var(--sh-lg)',width:248,overflow:'hidden'}}>
           <div style={{padding:'10px 14px 8px'}}>
             <p style={{fontSize:12,fontWeight:600,color:'var(--fg)',margin:0}}>Context length</p>
             <p style={{fontSize:11,color:'var(--fg-4)',margin:'3px 0 0',lineHeight:1.5}}>How much of the chat the model keeps in mind. Bigger remembers more but is slower.</p>
@@ -317,7 +319,7 @@ function ContextControl({ model, localLive, isAdmin, ctxChoice, onChoose }: {
                 const active = (ctxChoice ?? null) === opt.v;
                 return (
                   <button key={String(opt.v)} onClick={()=>{onChoose(opt.v);setOpen(false);}}
-                    style={{display:'flex',width:'100%',alignItems:'center',justifyContent:'space-between',padding:'8px 10px',borderRadius:'var(--r)',fontSize:12.5,color:active?'var(--fg)':'var(--fg-2)',background:active?'var(--bg-3)':'transparent',border:'none',cursor:'pointer',fontFamily:'Inter,sans-serif',transition:'background .1s'}}
+                    style={{display:'flex',width:'100%',alignItems:'center',justifyContent:'space-between',padding:'8px 10px',borderRadius:'var(--r)',fontSize:12.5,color:active?'var(--fg)':'var(--fg-2)',background:active?'var(--bg-3)':'transparent',border:'none',cursor:'pointer',fontFamily:'Newsreader,Georgia,serif',transition:'background .1s'}}
                     onMouseEnter={e=>{if(!active)(e.currentTarget as HTMLElement).style.background='var(--bg-3)';}}
                     onMouseLeave={e=>{if(!active)(e.currentTarget as HTMLElement).style.background='transparent';}}>
                     <span style={typeof opt.v==='number'?{fontFamily:'JetBrains Mono,monospace'}:undefined}>{opt.label}</span>
@@ -355,7 +357,7 @@ function DownloadsButton({ jobs, onCancel }: { jobs: DownloadJob[]; onCancel: (i
         <span style={{fontSize:12,fontWeight:500,color:'var(--fg-3)',fontFamily:'JetBrains Mono,monospace'}}>{active.length>1?`${active.length} · `:''}{avg}%</span>
       </button>
       {open && (
-        <div className="anim-scale-in" style={{position:'absolute',top:'calc(100% + 6px)',right:0,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:10,boxShadow:'var(--sh-lg)',width:284,overflow:'hidden'}}>
+        <div className="anim-scale-in" style={{position:'absolute',top:'calc(100% + 6px)',right:0,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:0,boxShadow:'var(--sh-lg)',width:284,overflow:'hidden'}}>
           <div style={{padding:'10px 14px 8px'}}>
             <p style={{fontSize:12,fontWeight:600,color:'var(--fg)',margin:0}}>Downloading models</p>
             <p style={{fontSize:11,color:'var(--fg-4)',margin:'3px 0 0',lineHeight:1.5}}>Runs on the server. Safe to close this tab.</p>
@@ -368,9 +370,9 @@ function DownloadsButton({ jobs, onCancel }: { jobs: DownloadJob[]; onCancel: (i
                   <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
                     <span style={{flex:1,minWidth:0,fontSize:12,color:'var(--fg-2)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{j.name}</span>
                     <span style={{fontSize:11,color:'var(--g-text)',fontFamily:'JetBrains Mono,monospace',flexShrink:0}}>{j.pct}%</span>
-                    <button onClick={()=>onCancel(j.id)} title="Cancel" className="btn-ghost-sm" style={{padding:'2px 6px',fontSize:11,color:'var(--err)',flexShrink:0}}>✕</button>
+                    <button onClick={()=>onCancel(j.id)} title="Cancel" aria-label={`Cancel download of ${j.name}`} className="btn-ghost-sm" style={{padding:'6px 8px',fontSize:11,color:'var(--err)',flexShrink:0}}>✕</button>
                   </div>
-                  <div style={{height:4,background:'var(--bg-3)',borderRadius:3,overflow:'hidden'}}>
+                  <div style={{height:4,background:'var(--bg-3)',borderRadius:0,overflow:'hidden'}}>
                     <div style={{height:'100%',width:`${j.pct}%`,background:'var(--g)',transition:'width .4s'}}/>
                   </div>
                   <p style={{fontSize:10,color:'var(--fg-4)',margin:'4px 0 0',fontFamily:'JetBrains Mono,monospace'}}>{fmtBytes(j.downloaded)} / {fmtBytes(j.total)}{j.speedBps>0?` · ${fmtBytes(j.speedBps)}/s`:''}{eta?` · ${eta} left`:''}</p>
@@ -385,7 +387,7 @@ function DownloadsButton({ jobs, onCancel }: { jobs: DownloadJob[]; onCancel: (i
 }
 
 // ─── Conversation item ────────────────────────────────────────
-function ConvItem({ conv, active, folders, onClick, onDelete, onPin, onArchive, onMove }: {
+const ConvItem = memo(function ConvItem({ conv, active, folders, onClick, onDelete, onPin, onArchive, onMove }: {
   conv: Conv; active: boolean; folders: Folder[];
   onClick: ()=>void; onDelete: (e: React.MouseEvent)=>void;
   onPin: ()=>void; onArchive: ()=>void; onMove: (folderId: number|null)=>void;
@@ -410,7 +412,7 @@ function ConvItem({ conv, active, folders, onClick, onDelete, onPin, onArchive, 
       <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:13.5}}>{conv.title}</span>
       <div ref={ref} style={{position:'relative',flexShrink:0}} onClick={e=>e.stopPropagation()}>
         <button onClick={e=>{e.stopPropagation();setMenu(o=>!o);}} className="btn-ghost-sm"
-          style={{padding:'3px 5px',opacity:menu?1:0}}
+          style={{padding:'6px 7px',opacity:menu?1:0}}
           onMouseEnter={e=>(e.currentTarget as HTMLElement).style.opacity='1'}
           onMouseLeave={e=>{if(!menu)(e.currentTarget as HTMLElement).style.opacity='0';}}
           onFocus={e=>(e.currentTarget as HTMLElement).style.opacity='1'}
@@ -418,7 +420,7 @@ function ConvItem({ conv, active, folders, onClick, onDelete, onPin, onArchive, 
           <Ico.Dots/>
         </button>
         {menu && (
-          <div className="anim-scale-in" style={{position:'absolute',right:0,top:'100%',marginTop:4,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:8,boxShadow:'var(--sh-lg)',overflow:'hidden',minWidth:172}}>
+          <div className="anim-scale-in" style={{position:'absolute',right:0,top:'100%',marginTop:4,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:0,boxShadow:'var(--sh-lg)',overflow:'hidden',minWidth:172}}>
             {row(<><Ico.Pin/> {conv.pinned?'Unpin':'Pin to top'}</>, e=>{e.stopPropagation();onPin();setMenu(false);})}
             {row(<><Ico.Folder/> Move to folder</>, e=>{e.stopPropagation();setMoveOpen(o=>!o);})}
             {moveOpen && (
@@ -439,10 +441,10 @@ function ConvItem({ conv, active, folders, onClick, onDelete, onPin, onArchive, 
       </div>
     </div>
   );
-}
+}, (a,b)=>a.conv===b.conv && a.active===b.active && a.folders===b.folders);
 
 // ─── Message bubble ───────────────────────────────────────────
-function MsgBubble({ msg, onEdit, onRegen, tts, density, showStats, userInits }: {
+const MsgBubble = memo(function MsgBubble({ msg, onEdit, onRegen, tts, density, showStats, userInits }: {
   msg: Msg & {id?: string}; onEdit?: ()=>void; onRegen?: ()=>void;
   tts: ReturnType<typeof useTextToSpeech>; density: 'compact'|'comfortable'; showStats?: boolean; userInits?: string;
 }) {
@@ -462,18 +464,18 @@ function MsgBubble({ msg, onEdit, onRegen, tts, density, showStats, userInits }:
               <div style={{display:'flex',gap:6,flexWrap:'wrap',justifyContent:'flex-end',marginBottom:msg.content?6:0}}>
                 {msg.images.map((src,i)=>(
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img key={i} src={src} alt="attachment" style={{maxWidth:200,maxHeight:200,borderRadius:10,border:'1px solid var(--bd-2)',objectFit:'cover'}}/>
+                  <img key={i} src={src} alt="attachment" style={{maxWidth:200,maxHeight:200,borderRadius:0,border:'1px solid var(--bd-2)',objectFit:'cover'}}/>
                 ))}
               </div>
             )}
-            {msg.content&&<div style={{background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:'12px 12px 3px 12px',padding:'11px 16px',fontSize:15,lineHeight:1.75,color:'var(--fg)',wordBreak:'break-word',whiteSpace:'pre-wrap'}}>{msg.content}</div>}
-            <div style={{display:'flex',justifyContent:'flex-end',gap:4,marginTop:5,opacity:0,transition:'opacity .15s'}}
+            {msg.content&&<div style={{background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:0,borderRight:'3px solid var(--fg)',padding:'11px 16px',fontSize:15,lineHeight:1.75,color:'var(--fg)',wordBreak:'break-word',whiteSpace:'pre-wrap'}}>{msg.content}</div>}
+            <div className="msg-actions" style={{display:'flex',justifyContent:'flex-end',gap:4,marginTop:5}}
               onMouseEnter={e=>(e.currentTarget as HTMLElement).style.opacity='1'}
-              onMouseLeave={e=>(e.currentTarget as HTMLElement).style.opacity='0'}>
-              <button onClick={copy} className="btn-ghost-sm" style={{fontSize:12,padding:'3px 7px',color:copied?'var(--ok)':'var(--fg-3)'}}>
+              onMouseLeave={e=>(e.currentTarget as HTMLElement).style.opacity=''}>
+              <button onClick={copy} className="btn-ghost-sm" style={{fontSize:12,padding:'6px 8px',color:copied?'var(--ok)':'var(--fg-3)'}}>
                 {copied?<><Ico.Check/> Copied</>:<><Ico.Copy/> Copy</>}
               </button>
-              {onEdit && <button onClick={onEdit} className="btn-ghost-sm" style={{fontSize:12,padding:'3px 7px'}}><Ico.Edit/> Edit</button>}
+              {onEdit && <button onClick={onEdit} className="btn-ghost-sm" style={{fontSize:12,padding:'6px 8px'}}><Ico.Edit/> Edit</button>}
             </div>
           </div>
           <div style={{width:28,height:28,borderRadius:'50%',background:'var(--bg-3)',border:'1px solid var(--bd-2)',color:'var(--fg-3)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:600,flexShrink:0,marginBottom:22}}>{userInits??'U'}</div>
@@ -529,16 +531,16 @@ function MsgBubble({ msg, onEdit, onRegen, tts, density, showStats, userInits }:
           </div>
         )}
         {!msg.streaming && (
-          <div style={{display:'flex',alignItems:'center',gap:2,marginTop:8,opacity:0,transition:'opacity .15s'}}
+          <div className="msg-actions" style={{display:'flex',alignItems:'center',gap:2,marginTop:8}}
             onMouseEnter={e=>(e.currentTarget as HTMLElement).style.opacity='1'}
-            onMouseLeave={e=>(e.currentTarget as HTMLElement).style.opacity='0'}>
+            onMouseLeave={e=>(e.currentTarget as HTMLElement).style.opacity=''}>
             {[
               {icon:<>{copied?<Ico.Check/>:<Ico.Copy/>}</>,label:copied?'Copied':'Copy',fn:copy,active:copied},
               ...(onRegen?[{icon:<Ico.Retry/>,label:'Retry',fn:onRegen,active:false}]:[]),
               ...(tts.supported?[{icon:<Ico.Vol/>,label:speaking?'Stop':'Read',fn:()=>speaking?tts.stop():tts.speak(msg.content,id),active:speaking}]:[]),
             ].map(({icon,label,fn,active})=>(
               <button key={label} onClick={fn} className="btn-ghost-sm"
-                style={{fontSize:12,padding:'3px 8px',color:active?'var(--g)':'var(--fg-3)'}}>
+                style={{fontSize:12,padding:'6px 8px',color:active?'var(--g)':'var(--fg-3)'}}>
                 {icon} {label}
               </button>
             ))}
@@ -547,7 +549,9 @@ function MsgBubble({ msg, onEdit, onRegen, tts, density, showStats, userInits }:
       </div>
     </div>
   );
-}
+}, (a,b)=>a.msg===b.msg && a.density===b.density && a.showStats===b.showStats && a.userInits===b.userInits
+  && a.tts.speaking===b.tts.speaking && a.tts.speakingId===b.tts.speakingId && a.tts.supported===b.tts.supported
+  && !!a.onEdit===!!b.onEdit && !!a.onRegen===!!b.onRegen);
 
 // ─── Welcome screen ───────────────────────────────────────────
 const SUGGESTIONS = [
@@ -557,37 +561,45 @@ const SUGGESTIONS = [
   { title: 'Help me write', sub: 'Draft, edit, or sharpen any text', prompt: 'Help me write:\n\n' },
 ];
 
-function Welcome({ name, onSelect, taRef }: { name?: string|null; onSelect: (p:string)=>void; taRef: React.RefObject<HTMLTextAreaElement> }) {
+const Welcome = memo(function Welcome({ name, onSelect, taRef }: { name?: string|null; onSelect: (p:string)=>void; taRef: React.RefObject<HTMLTextAreaElement|null> }) {
   const greet = (() => { const hr = new Date().getHours(); return hr < 5 ? 'Still up' : hr < 12 ? 'Good morning' : hr < 18 ? 'Good afternoon' : 'Good evening'; })();
   const h = name ? `${greet}, ${name.split(' ')[0]}.` : `${greet}.`;
+  const dateline = new Date().toLocaleDateString(undefined, { weekday:'long', year:'numeric', month:'long', day:'numeric' });
   return (
-    <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',minHeight:'64vh',padding:'0 16px'}}>
-      <div className="anim-fade-up" style={{textAlign:'center',marginBottom:36}}>
-        <div style={{display:'inline-flex',alignItems:'center',justifyContent:'center',marginBottom:20}} className="chakor-mark-lg">
-          <ChakorMark size={46}/>
+    <div className="welcome-front" style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',minHeight:'64vh',padding:'0 16px'}}>
+      <div className="anim-fade-up" style={{width:'100%',maxWidth:660,textAlign:'center',marginBottom:30}}>
+        <hr className="rule-fat"/>
+        <div className="masthead-name" style={{fontSize:'clamp(38px,11vw,54px)',lineHeight:1.1,margin:'10px 0 6px'}}>{APP.name}</div>
+        <hr className="rule-double"/>
+        <p className="byline" style={{margin:'6px 0 0'}}>{dateline} · your local edition</p>
+        <h1 className="headline" style={{fontSize:'clamp(21px,4.5vw,28px)',margin:'22px 0 8px',lineHeight:1.15}}>{h}</h1>
+        <div className="dropcap" style={{fontSize:14,color:'var(--fg-2)',lineHeight:1.55,margin:'0 auto',maxWidth:480,textAlign:'justify',textAlignLast:'center'}}>
+          Ask anything. The short questions get short answers; the hard ones get the full
+          newsroom treatment, with sources, working code, and follow-ups filed in the margins.
+          Everything stays on this machine, and nothing leaves the building.
         </div>
-        <h1 style={{fontSize:34,fontWeight:800,letterSpacing:'-0.03em',color:'var(--fg)',marginBottom:10,lineHeight:1.05}}>{h}</h1>
-        <p style={{fontSize:15.5,color:'var(--fg-3)',maxWidth:440,margin:'0 auto',lineHeight:1.5}}>
-          Ask anything. I keep it short when it&apos;s simple, and go deep when it matters.
-        </p>
       </div>
-      <div className="anim-fade-up" style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10,width:'100%',maxWidth:660,animationDelay:'.08s'}}>
-        {SUGGESTIONS.map(s=>(
-          <button key={s.title} onClick={()=>{onSelect(s.prompt);taRef.current?.focus();}}
-            style={{position:'relative',background:'var(--bg-2)',border:'1px solid var(--bd)',borderRadius:12,padding:'15px 16px',textAlign:'left',cursor:'pointer',transition:'background .14s, border-color .14s, transform .14s',fontFamily:'Inter,sans-serif',overflow:'hidden'}}
-            onMouseEnter={e=>{const el=e.currentTarget as HTMLElement; el.style.background='var(--bg-3)'; el.style.borderColor='var(--g-bd)'; el.style.transform='translateY(-1px)';}}
-            onMouseLeave={e=>{const el=e.currentTarget as HTMLElement; el.style.background='var(--bg-2)'; el.style.borderColor='var(--bd)'; el.style.transform='translateY(0)';}}>
-            <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:4,gap:8}}>
-              <p style={{fontSize:14,fontWeight:600,color:'var(--fg)'}}>{s.title}</p>
-              <span style={{color:'var(--g)',opacity:.55,flexShrink:0,display:'inline-flex'}}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></span>
-            </div>
-            <p style={{fontSize:12,color:'var(--fg-3)'}}>{s.sub}</p>
-          </button>
-        ))}
+      <div className="anim-fade-up" style={{width:'100%',maxWidth:660,animationDelay:'.08s'}}>
+        <hr className="rule-thin"/>
+        <div className="front-grid">
+          {SUGGESTIONS.map((s,i)=>(
+            <button key={s.title} onClick={()=>{onSelect(s.prompt);taRef.current?.focus();}}
+              style={{position:'relative',background:'transparent',border:'none',borderRight:'1px solid var(--bd-2)',borderBottom:'1px solid var(--bd-2)',padding:'14px 16px',textAlign:'left',cursor:'pointer',transition:'background .14s',fontFamily:'Newsreader,Georgia,serif',overflow:'hidden'}}
+              onMouseEnter={e=>{(e.currentTarget as HTMLElement).style.background='var(--bg-2)';}}
+              onMouseLeave={e=>{(e.currentTarget as HTMLElement).style.background='transparent';}}>
+              <p className="kicker" style={{marginBottom:4}}>Section {i+1}</p>
+              <div style={{display:'flex',alignItems:'baseline',justifyContent:'space-between',marginBottom:3,gap:8}}>
+                <p className="headline" style={{fontSize:16,color:'var(--fg)'}}>{s.title}</p>
+                <span style={{color:'var(--g)',opacity:.55,flexShrink:0,display:'inline-flex'}}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg></span>
+              </div>
+              <p style={{fontSize:12.5,color:'var(--fg-3)',fontStyle:'italic'}}>{s.sub}</p>
+            </button>
+          ))}
+        </div>
       </div>
     </div>
   );
-}
+});
 
 // ─── Docs panel ───────────────────────────────────────────────
 function DocsPanel({ docs, uploading, uploadError, onUpload, onDelete, onClose }: {
@@ -599,16 +611,16 @@ function DocsPanel({ docs, uploading, uploadError, onUpload, onDelete, onClose }
   return (
     <div style={{position:'fixed',inset:0,zIndex:50,display:'flex',alignItems:'flex-start',justifyContent:'flex-end'}}>
       <div style={{position:'absolute',inset:0,background:'rgba(0,0,0,0.45)'}} onClick={onClose}/>
-      <div className="anim-scale-in" style={{position:'relative',zIndex:1,width:300,maxHeight:'85vh',marginTop:60,marginRight:12,display:'flex',flexDirection:'column',background:'var(--bg-1)',border:'1px solid var(--bd-2)',borderRadius:12,boxShadow:'var(--sh-lg)'}}>
+      <div role="dialog" aria-modal="true" aria-label="Documents" className="anim-scale-in" style={{position:'relative',zIndex:1,width:300,maxHeight:'85vh',marginTop:60,marginRight:12,display:'flex',flexDirection:'column',background:'var(--bg-1)',border:'1px solid var(--bd-2)',borderRadius:0,boxShadow:'var(--sh-lg)'}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'14px 16px',borderBottom:'1px solid var(--bd)',flexShrink:0}}>
           <div style={{display:'flex',alignItems:'center',gap:8}}>
             <Ico.File/><span style={{fontSize:14,fontWeight:600,color:'var(--fg)'}}>Documents</span>
-            {docs.length>0&&<span style={{fontSize:11,padding:'2px 7px',borderRadius:20,background:'var(--bg-3)',color:'var(--fg-3)'}}>{docs.length}</span>}
+            {docs.length>0&&<span style={{fontSize:11,padding:'2px 7px',borderRadius:0,background:'var(--bg-3)',color:'var(--fg-3)'}}>{docs.length}</span>}
           </div>
-          <button onClick={onClose} className="btn-ghost-sm" style={{padding:'4px 5px'}}><Ico.X/></button>
+          <button onClick={onClose} aria-label="Close documents panel" className="btn-ghost-sm" style={{padding:'6px 7px'}}><Ico.X/></button>
         </div>
         <div style={{padding:'12px 14px',borderBottom:'1px solid var(--bd)',flexShrink:0}}>
-          <div style={{border:`1.5px dashed ${drag?'var(--g)':'var(--bd-2)'}`,borderRadius:8,padding:'24px 12px',textAlign:'center',cursor:'pointer',transition:'border-color .15s, background .15s',background:drag?'var(--g-dim)':'transparent'}}
+          <div style={{border:`1.5px dashed ${drag?'var(--g)':'var(--bd-2)'}`,borderRadius:0,padding:'24px 12px',textAlign:'center',cursor:'pointer',transition:'border-color .15s, background .15s',background:drag?'var(--g-dim)':'transparent'}}
             onClick={()=>ref.current?.click()}
             onDragOver={e=>{e.preventDefault();setDrag(true);}}
             onDragLeave={()=>setDrag(false)}
@@ -638,9 +650,9 @@ function DocsPanel({ docs, uploading, uploadError, onUpload, onDelete, onClose }
                   <p style={{fontSize:13,color:'var(--fg)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{d.filename}</p>
                   <p style={{fontSize:11,color:'var(--fg-4)',marginTop:2,fontFamily:'JetBrains Mono,monospace'}}>{fmtBytes(d.size_bytes)} · {rel(d.created_at)} ago</p>
                 </div>
-                <button onClick={()=>onDelete(d.id)} className="btn-ghost-sm" style={{padding:'3px 5px',color:'var(--err)',opacity:0,transition:'opacity .15s'}}
+                <button onClick={()=>onDelete(d.id)} aria-label={`Delete ${d.filename}`} className="btn-ghost-sm msg-actions" style={{padding:'6px 7px',color:'var(--err)'}}
                   onMouseEnter={e=>(e.currentTarget as HTMLElement).style.opacity='1'}
-                  onMouseLeave={e=>(e.currentTarget as HTMLElement).style.opacity='0'}><Ico.Trash/></button>
+                  onMouseLeave={e=>(e.currentTarget as HTMLElement).style.opacity=''}><Ico.Trash/></button>
               </div>
             ))
           }
@@ -663,10 +675,10 @@ function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss: (id:number)=>
   return (
     <div style={{position:'fixed',top:16,right:16,zIndex:200,display:'flex',flexDirection:'column',gap:8,pointerEvents:'none'}}>
       {items.map(t=>(
-        <div key={t.id} className="toast" style={{display:'flex',alignItems:'center',gap:10,padding:'11px 15px',background:'var(--bg-2)',border:`1px solid ${t.ok?'rgba(74,222,128,.18)':'rgba(248,113,113,.18)'}`,borderRadius:10,boxShadow:'var(--sh-lg)',fontSize:13,color:'var(--fg)',maxWidth:340,pointerEvents:'auto'}}>
+        <div key={t.id} className="toast" style={{display:'flex',alignItems:'center',gap:10,padding:'11px 15px',background:'var(--bg-2)',border:`1px solid ${t.ok?'rgba(74,222,128,.18)':'rgba(248,113,113,.18)'}`,borderRadius:0,boxShadow:'var(--sh-lg)',fontSize:13,color:'var(--fg)',maxWidth:340,pointerEvents:'auto'}}>
           <span style={{color:t.ok?'var(--ok)':'var(--err)',fontSize:12,flexShrink:0}}>{t.ok?'✓':'✕'}</span>
           <span style={{flex:1}}>{t.msg}</span>
-          <button onClick={()=>onDismiss(t.id)} className="btn-ghost-sm" style={{padding:'2px 4px',flexShrink:0}}><Ico.X/></button>
+          <button onClick={()=>onDismiss(t.id)} aria-label="Dismiss notification" className="btn-ghost-sm" style={{padding:'6px 7px',flexShrink:0}}><Ico.X/></button>
         </div>
       ))}
     </div>
@@ -674,10 +686,10 @@ function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss: (id:number)=>
 }
 
 // ─── IconButton helper ────────────────────────────────────────
-function IcoBtn({ children, onClick, title, active, danger }: { children: React.ReactNode; onClick?: ()=>void; title?: string; active?: boolean; danger?: boolean }) {
+function IcoBtn({ children, onClick, title, active, danger, ariaLabel }: { children: React.ReactNode; onClick?: ()=>void; title?: string; active?: boolean; danger?: boolean; ariaLabel?: string }) {
   return (
-    <button onClick={onClick} title={title} className="btn-ghost-sm"
-      style={{padding:'6px 7px',color:danger?'var(--err)':active?'var(--g)':'var(--fg-3)',background:active?'var(--g-dim)':'transparent'}}>
+    <button onClick={onClick} title={title} aria-label={ariaLabel??title} className="btn-ghost-sm"
+      style={{padding:'8px 9px',color:danger?'var(--err)':active?'var(--g)':'var(--fg-3)',background:active?'var(--g-dim)':'transparent'}}>
       {children}
     </button>
   );
@@ -687,7 +699,7 @@ function IcoBtn({ children, onClick, title, active, danger }: { children: React.
 function FeaturePill({ icon, label, active, onClick }: { icon: React.ReactNode; label: string; active: boolean; onClick: ()=>void }) {
   return (
     <button onClick={onClick}
-      style={{display:'inline-flex',alignItems:'center',gap:5,padding:'5px 10px',borderRadius:20,fontSize:12,fontWeight:500,fontFamily:'Inter,sans-serif',cursor:'pointer',border:`1px solid ${active?'var(--g-bd)':'var(--bd-2)'}`,background:active?'var(--g-dim)':'transparent',color:active?'var(--g-text)':'var(--fg-3)',transition:'all .15s',whiteSpace:'nowrap'}}
+      style={{display:'inline-flex',alignItems:'center',gap:5,padding:'5px 10px',borderRadius:0,fontSize:12,fontWeight:500,fontFamily:'Newsreader,Georgia,serif',cursor:'pointer',border:`1px solid ${active?'var(--g-bd)':'var(--bd-2)'}`,background:active?'var(--g-dim)':'transparent',color:active?'var(--g-text)':'var(--fg-3)',transition:'all .15s',whiteSpace:'nowrap'}}
       onMouseEnter={e=>{if(!active){(e.currentTarget as HTMLElement).style.background='var(--bg-2)';(e.currentTarget as HTMLElement).style.color='var(--fg-2)';}}}
       onMouseLeave={e=>{if(!active){(e.currentTarget as HTMLElement).style.background='transparent';(e.currentTarget as HTMLElement).style.color='var(--fg-3)';}}}
     >
@@ -748,28 +760,48 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   const [promptsOpen, setPromptsOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const tid = useRef(0);
+  // Agent Workspace: when on, messages go to the ReAct agent instead of /api/chat.
+  const [agentMode, setAgentMode] = useState(false);
+  const workspaceRef = useRef<AgentWorkspaceHandle>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const convSearchRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
   const atBottom = useRef(true);
+  const lastScroll = useRef(0);
+  // Stream/load invalidation tokens: switching conversations mid-stream aborts
+  // the fetch, but queued setMsgs callbacks could still land on the newly loaded
+  // conversation. Every stream UI update checks its token is still current.
+  const streamToken = useRef(0);
+  const loadToken = useRef(0);
 
   function toast(msg: string, ok=true) { const id=++tid.current; setToasts(p=>[...p,{id,msg,ok}]); setTimeout(()=>setToasts(p=>p.filter(t=>t.id!==id)),4000); }
   function onScroll() { const el=scrollRef.current; if(el) atBottom.current=el.scrollHeight-el.scrollTop-el.clientHeight<100; }
-  useEffect(()=>{ if(atBottom.current) endRef.current?.scrollIntoView({behavior:'smooth'}); },[msgs]);
   useEffect(()=>{
-    const update=()=>{ const d=window.innerWidth>=768; setIsDesktop(d); };
+    if(!atBottom.current) return;
+    if(msgs.length===0) return; // empty conversation shows the welcome front page from the top
+    // Throttle during streaming: a smooth-scroll restart per token is janky.
+    const now=Date.now(); if(now-lastScroll.current<150) return; lastScroll.current=now;
+    endRef.current?.scrollIntoView({behavior:streaming?'auto':'smooth'});
+  },[msgs,streaming]);
+  useEffect(()=>{
+    let prev=window.innerWidth>=768;
+    const update=()=>{ const d=window.innerWidth>=768; setIsDesktop(d); if(d!==prev){prev=d; setSidebarOpen(d);} };
     update();
-    if(window.innerWidth>=768) setSidebarOpen(true);
+    if(prev) setSidebarOpen(true);
     window.addEventListener('resize',update);
     return()=>window.removeEventListener('resize',update);
   },[]);
+  // Abort any in-flight stream when the shell unmounts (navigating away).
+  // abortRef/streamToken are stable refs; intentionally run once.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(()=>()=>{ abortRef.current?.abort(); streamToken.current++; },[]);
   useEffect(()=>{ fetch('/api/documents').then(r=>r.json()).then((d:Doc[])=>setDocs(Array.isArray(d)?d:[])).catch(()=>{}); },[]);
   useEffect(()=>{ fetch('/api/prompts').then(r=>r.json()).then((p:Prompt[])=>setPrompts(Array.isArray(p)?p:[])).catch(()=>{}); },[]);
   useEffect(()=>{ fetch('/api/folders').then(r=>r.json()).then((f:Folder[])=>setFolders(Array.isArray(f)?f:[])).catch(()=>{}); },[]);
   useEffect(()=>{ fetch('/api/tools').then(r=>r.json()).then((t:ToolInfo[])=>setToolList(Array.isArray(t)?t:[])).catch(()=>{}); },[]);
-  useEffect(()=>{ refreshLoaded(); refreshLocal(); // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(()=>{ refreshLoaded(); refreshLocal();
   },[]);
   // Poll background model downloads so the header chip keeps moving. Admin only
   // (the jobs route is gated), light enough for a self-host.
@@ -795,13 +827,19 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   useEffect(()=>{
     const h=(e:KeyboardEvent)=>{
       const meta=e.metaKey||e.ctrlKey;
-      if(e.key==='Escape'){if(showExport){setShowExport(false);return;}if(streaming){abortRef.current?.abort();return;}}
+      if(e.key==='Escape'){
+        if(showExport){setShowExport(false);return;}
+        if(docsOpen){setDocsOpen(false);return;}
+        if(promptsOpen){setPromptsOpen(false);return;}
+        if(toolsOpen){setToolsOpen(false);return;}
+        if(streaming){abortRef.current?.abort();return;}
+      }
       if(meta&&e.key==='k'){e.preventDefault();convSearchRef.current?.focus();}
       if(meta&&e.key==='n'){e.preventDefault();startNew();}
     };
     window.addEventListener('keydown',h); return()=>window.removeEventListener('keydown',h);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[streaming,showExport]);
+  },[streaming,showExport,docsOpen,promptsOpen,toolsOpen]);
   useEffect(()=>{
     if(speech.transcript){ setInput(p=>{const b=p.replace(speech.interimTranscript,'').trimEnd(); return b+(b?' ':'')+speech.transcript;}); speech.reset(); }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -825,19 +863,26 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
 
   const loadConv = useCallback(async(id:string)=>{
     if(window.innerWidth<768) setSidebarOpen(false);
+    // Stop any in-flight stream first: its token-guarded updates would otherwise
+    // keep mutating the conversation we are about to load.
+    abortRef.current?.abort();
+    streamToken.current++;
+    const myLoad = ++loadToken.current;
     setLoadingConv(true); setMsgs([]); setActiveId(id);
     try {
       const r=await fetch(`/api/conversations/${id}`);
-      if(r.ok){const d=await r.json(); setMsgs((d.messages as {id:number;role:string;content:string;images?:string[]}[]).filter(m=>m.role==='user'||m.role==='assistant').map(m=>({role:m.role as 'user'|'assistant',content:m.content,dbId:m.id,images:m.images}))); setTitleVal(d.title);}
-    } finally { setLoadingConv(false); }
+      if(r.ok){const d=await r.json(); if(loadToken.current!==myLoad) return; setMsgs((d.messages as {id:number;role:string;content:string;images?:string[]}[]).filter(m=>m.role==='user'||m.role==='assistant').map(m=>({role:m.role as 'user'|'assistant',content:m.content,dbId:m.id,images:m.images}))); setTitleVal(d.title);}
+    } finally { if(loadToken.current===myLoad) setLoadingConv(false); }
+  // abortRef is a stable object held in state; it never changes identity.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
-  function startNew() { if(window.innerWidth<768)setSidebarOpen(false); setActiveId(null); setMsgs([]); setTitleVal(''); setEditTitle(false); taRef.current?.focus(); }
-  async function deleteConv(id:string,e:React.MouseEvent) { e.stopPropagation(); await fetch(`/api/conversations/${id}`,{method:'DELETE'}); setConvs(p=>p.filter(c=>c.id!==id)); if(activeId===id) startNew(); }
-  async function patchConv(id:string, patch:Record<string,unknown>) { try { await fetch(`/api/conversations/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)}); } catch {} }
-  function togglePin(c:Conv) { const v=c.pinned?0:1; setConvs(p=>p.map(x=>x.id===c.id?{...x,pinned:v}:x)); patchConv(c.id,{pinned:!!v}); }
-  function toggleArchive(c:Conv) { const v=c.archived?0:1; setConvs(p=>p.map(x=>x.id===c.id?{...x,archived:v}:x)); patchConv(c.id,{archived:!!v}); if(activeId===c.id&&v) startNew(); }
-  function moveToFolder(c:Conv, folderId:number|null) { setConvs(p=>p.map(x=>x.id===c.id?{...x,folder_id:folderId}:x)); patchConv(c.id,{folderId}); }
+  function startNew() { if(window.innerWidth<768)setSidebarOpen(false); abortRef.current?.abort(); streamToken.current++; loadToken.current++; setActiveId(null); setMsgs([]); setTitleVal(''); setEditTitle(false); taRef.current?.focus(); }
+  async function deleteConv(id:string,e:React.MouseEvent) { e.stopPropagation(); if(!window.confirm('Delete this conversation? This cannot be undone.')) return; try { const r=await fetch(`/api/conversations/${id}`,{method:'DELETE'}); if(!r.ok){toast('Could not delete conversation',false);return;} } catch { toast('Network error',false); return; } setConvs(p=>p.filter(c=>c.id!==id)); if(activeId===id) startNew(); else toast('Conversation deleted'); }
+  async function patchConv(id:string, patch:Record<string,unknown>, rollback?:()=>void) { try { const r=await fetch(`/api/conversations/${id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)}); if(!r.ok) throw new Error(); } catch { rollback?.(); toast('Could not save change',false); } }
+  function togglePin(c:Conv) { const v=c.pinned?0:1; setConvs(p=>p.map(x=>x.id===c.id?{...x,pinned:v}:x)); patchConv(c.id,{pinned:!!v},()=>setConvs(p=>p.map(x=>x.id===c.id?{...x,pinned:c.pinned}:x))); }
+  function toggleArchive(c:Conv) { const v=c.archived?0:1; setConvs(p=>p.map(x=>x.id===c.id?{...x,archived:v}:x)); patchConv(c.id,{archived:!!v},()=>setConvs(p=>p.map(x=>x.id===c.id?{...x,archived:c.archived}:x))); if(activeId===c.id&&v) startNew(); }
+  function moveToFolder(c:Conv, folderId:number|null) { setConvs(p=>p.map(x=>x.id===c.id?{...x,folder_id:folderId}:x)); patchConv(c.id,{folderId},()=>setConvs(p=>p.map(x=>x.id===c.id?{...x,folder_id:c.folder_id}:x))); }
   async function createFolderSubmit() { const name=newFolderName.trim(); if(!name)return; try { const r=await fetch('/api/folders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name})}); if(r.ok){const f=await r.json(); setFolders(p=>[...p,f]); setNewFolderName(''); setNewFolderOpen(false); toast('Folder created');} else toast('Could not create folder',false); } catch { toast('Network error',false); } }
   async function deleteFolderUI(id:number) { await fetch(`/api/folders/${id}`,{method:'DELETE'}).catch(()=>{}); setFolders(p=>p.filter(f=>f.id!==id)); setConvs(p=>p.map(c=>c.folder_id===id?{...c,folder_id:null}:c)); }
   async function refreshLoaded() { try { const r=await fetch('/api/models/loaded'); const d=await r.json(); if(Array.isArray(d.models)) setLoadedNames(new Set((d.models as {name:string}[]).map(m=>m.name))); } catch {} }
@@ -862,7 +907,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
         const bits:string[]=[];
         if(Array.isArray(d.freed)&&d.freed.length) bits.push(`freed ${d.freed.join(', ')}`);
         if(d.llamaStarted) bits.push('starting it up');
-        toast(bits.length?`Switched to ${label} — ${bits.join(', ')}`:`Switched to ${label}`);
+        toast(bits.length?`Switched to ${label} (${bits.join(', ')})`:`Switched to ${label}`);
       }
       refreshEngines();
     } catch {}
@@ -894,7 +939,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
     try { const r=await fetch('/api/prompts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,body})}); const d=await r.json(); if(r.ok){setPrompts(p=>[d,...p]);toast('Prompt saved');} else toast(d.error??'Failed to save',false); } catch { toast('Network error',false); }
   }
   async function deletePrompt(id:number) { await fetch(`/api/prompts/${id}`,{method:'DELETE'}); setPrompts(p=>p.filter(x=>x.id!==id)); }
-  function usePrompt(body:string) { setInput(prev=>prev.trim()?prev.replace(/\s*$/,'')+'\n'+body:body); setPromptsOpen(false); requestAnimationFrame(()=>{const el=taRef.current;if(el){el.focus();el.style.height='auto';el.style.height=Math.min(el.scrollHeight,180)+'px';}}); }
+  function applyPrompt(body:string) { setInput(prev=>prev.trim()?prev.replace(/\s*$/,'')+'\n'+body:body); setPromptsOpen(false); requestAnimationFrame(()=>{const el=taRef.current;if(el){el.focus();el.style.height='auto';el.style.height=Math.min(el.scrollHeight,180)+'px';}}); }
   async function importConv(file:File) {
     try { const data=JSON.parse(await file.text()); const r=await fetch('/api/conversations/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}); const conv=await r.json(); if(!r.ok){toast(conv.error??'Import failed',false);return;} setConvs(p=>[conv,...p]); toast('Conversation imported'); loadConv(conv.id); } catch { toast('Could not read that file',false); }
   }
@@ -934,37 +979,77 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
     setMsgs(p=>[...(priorOverride??p),{role:'user',content:text,images:imgs.length?imgs:undefined},{role:'assistant',content:'',streaming:true}]);
     setStreaming(true);
     const ctrl=new AbortController(); abortRef.current=ctrl; let acc=''; let resolvedId:string|null=activeId;
+    const myToken=++streamToken.current;
+    // Every UI update from this stream goes through here: once the user switches
+    // conversations (or starts a new one) the token is stale and updates become
+    // no-ops, so a late delta can never land on the wrong conversation.
+    const updateMsgs=(fn:(prev:Msg[])=>Msg[])=>setMsgs(prev=>streamToken.current===myToken?fn(prev):prev);
+    let assistantMsgId:number|null=null;
     try {
       const ctxToSend = curModel?.provider==='llama' ? (localLive?.nCtx ?? undefined) : (ctxChoice ?? undefined);
       const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversationId:activeId||undefined,message:text,useSearch:useSearch&&!useDeep,useDeepResearch:useDeep,useRag:ragActive,modelId:modelId||undefined,images:imgs.length?imgs:undefined,tools:toolIds.length?toolIds:undefined,contextSize:ctxToSend}),signal:ctrl.signal});
-      setResearching(false); if(!r.ok) throw new Error(`HTTP ${r.status}`);
+      setResearching(false);
+      if(!r.ok){ let msg=`Request failed (HTTP ${r.status})`; try{const d=await r.json(); if(typeof d?.error==='string'&&d.error) msg=d.error;}catch{} throw new Error(msg); }
       const newId=r.headers.get('X-Conversation-Id');
       if(newId&&!activeId){resolvedId=newId;setActiveId(newId);setConvs(p=>[{id:newId,title:'New conversation',model:modelId||'chakor',created_at:Math.floor(Date.now()/1000),updated_at:Math.floor(Date.now()/1000)},...p]);}
       const reader=r.body!.getReader(); const dec=new TextDecoder(); let buf='';
       outer:while(true){const{done,value}=await reader.read(); if(done) break; buf+=dec.decode(value,{stream:true}); const parts=buf.split('\n\n'); buf=parts.pop()??'';
-        for(const part of parts){const line=part.trim(); if(!line.startsWith('data:')) continue; const data=line.slice(5).trim(); if(data==='[DONE]') break outer;
+        for(const part of parts){const lines=part.split('\n').filter(l=>l.startsWith('data:')); if(!lines.length) continue; const data=lines.map(l=>l.slice(5)).join('\n').trim(); if(data==='[DONE]') break outer;
           try{const p=JSON.parse(data) as {delta?:string;sources?:Source[];stats?:Stats;userMsgId?:number;assistantMsgId?:number;toolEvent?:ToolEvt};
-            if(p.userMsgId) setMsgs(prev=>{const u=[...prev];const i=u.length-2;if(i>=0&&u[i].role==='user')u[i]={...u[i],dbId:p.userMsgId};return u;});
-            if(p.assistantMsgId) setMsgs(prev=>{const u=[...prev];u[u.length-1]={...u[u.length-1],dbId:p.assistantMsgId};return u;});
-            if(p.sources) setMsgs(prev=>{const u=[...prev];u[u.length-1]={...u[u.length-1],sources:p.sources};return u;});
-            if(p.stats) setMsgs(prev=>{const u=[...prev];u[u.length-1]={...u[u.length-1],stats:p.stats};return u;});
-            if(p.toolEvent) setMsgs(prev=>{const u=[...prev];const last=u[u.length-1];u[u.length-1]={...last,toolEvents:[...(last.toolEvents??[]),p.toolEvent!]};return u;});
-            if(p.delta){acc+=p.delta;setMsgs(prev=>{const u=[...prev];u[u.length-1]={...u[u.length-1],content:acc,streaming:true};return u;});}
+            if(p.userMsgId) updateMsgs(prev=>{const u=[...prev];const i=u.length-2;if(i>=0&&u[i].role==='user')u[i]={...u[i],dbId:p.userMsgId};return u;});
+            if(p.assistantMsgId){assistantMsgId=p.assistantMsgId; updateMsgs(prev=>{const u=[...prev];u[u.length-1]={...u[u.length-1],dbId:p.assistantMsgId};return u;});}
+            if(p.sources) updateMsgs(prev=>{const u=[...prev];u[u.length-1]={...u[u.length-1],sources:p.sources};return u;});
+            if(p.stats) updateMsgs(prev=>{const u=[...prev];u[u.length-1]={...u[u.length-1],stats:p.stats};return u;});
+            if(p.toolEvent) updateMsgs(prev=>{const u=[...prev];const last=u[u.length-1];u[u.length-1]={...last,toolEvents:[...(last.toolEvents??[]),p.toolEvent!]};return u;});
+            if(p.delta){acc+=p.delta;updateMsgs(prev=>{const u=[...prev];u[u.length-1]={...u[u.length-1],content:acc,streaming:true};return u;});}
           }catch{}
         }
       }
     } catch(err) {
       setResearching(false);
-      if(!(err instanceof Error&&err.name==='AbortError')) setMsgs(p=>{const u=[...p];u[u.length-1]={role:'assistant',content:acc||'*Connection error. Please try again.*'};return u;});
+      if(!(err instanceof Error&&err.name==='AbortError')){
+        const msg=err instanceof Error&&err.message?err.message:'Connection error. Please try again.';
+        updateMsgs(p=>{const u=[...p];u[u.length-1]={role:'assistant',content:acc||`*${msg}*`};return u;});
+      }
     } finally {
       abortRef.current=null; setStreaming(false); setResearching(false);
-      setMsgs(p=>{const u=[...p];if(u.length>0)u[u.length-1]={...u[u.length-1],streaming:false};return u;});
+      updateMsgs(p=>{const u=[...p];if(u.length>0)u[u.length-1]={...u[u.length-1],streaming:false};return u;});
       if(isFirst&&resolvedId) setTimeout(()=>refreshTitle(resolvedId!),1500);
-      if(autoRead&&tts.supported&&acc) tts.speak(acc,msgs.length.toString());
+      if(autoRead&&tts.supported&&acc&&streamToken.current===myToken) tts.speak(acc,(assistantMsgId??msgs.length).toString());
     }
   }
 
-  async function handleSend() { const text=input.trim(); if((!text&&images.length===0)||streaming) return; const imgs=images; setInput(''); setImages([]); if(taRef.current) taRef.current.style.height='auto'; await sendMsg(text,undefined,imgs); }
+  // Agent Mode path: the workspace panel owns the agent stream; the final
+  // answer lands here as a normal assistant message.
+  async function handleAgentSend(text:string) {
+    const myToken=++streamToken.current;
+    setMsgs(p=>[...p,{role:'user',content:text},{role:'assistant',content:'',streaming:true}]);
+    setStreaming(true);
+    try {
+      await workspaceRef.current?.runAgent(text,(answer)=>{
+        if(streamToken.current!==myToken) return;
+        setMsgs(p=>{const u=[...p];u[u.length-1]={...u[u.length-1],content:answer,streaming:false};return u;});
+      });
+    } finally {
+      if(streamToken.current===myToken){
+        setMsgs(p=>{const u=[...p];const last=u[u.length-1];
+          if(last&&last.role==='assistant'){
+            u[u.length-1]={...last,
+              content:last.content||'*The agent stopped before giving a final answer. Check the Activity panel for what happened.*',
+              streaming:false};
+          }
+          return u;});
+      }
+      setStreaming(false);
+    }
+  }
+
+  async function handleSend() {
+    const text=input.trim(); if((!text&&images.length===0)||streaming) return;
+    const imgs=images; setInput(''); setImages([]); if(taRef.current) taRef.current.style.height='auto';
+    if(agentMode&&text){ await handleAgentSend(text); return; }
+    await sendMsg(text,undefined,imgs);
+  }
 
   const renderItem = (c:Conv)=>(
     <ConvItem key={c.id} conv={c} active={activeId===c.id} folders={folders}
@@ -973,7 +1058,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   );
 
   return (
-    <div style={{display:'flex',height:'100vh',overflow:'hidden',background:'var(--bg)',fontFamily:'Inter,sans-serif'}}>
+    <div style={{display:'flex',height:'100dvh',overflow:'hidden',background:'var(--bg)',fontFamily:'Newsreader,Georgia,serif'}}>
       <Toasts items={toasts} onDismiss={id=>setToasts(p=>p.filter(t=>t.id!==id))}/>
 
       {/* Mobile overlay */}
@@ -987,21 +1072,18 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
         transform:sidebarOpen?'translateX(0)':'translateX(-100%)',
         transition:'transform .25s ease',
       }}>
-        {/* Logo */}
-        <div style={{padding:'18px 14px 12px',borderBottom:'1px solid var(--bd)',flexShrink:0}}>
-          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:6}}>
-            <div className="chakor-mark"><ChakorMark size={24}/></div>
-            <span style={{fontWeight:800,fontSize:15,letterSpacing:'0.06em',color:'var(--fg)'}}>{APP.name.toUpperCase()}</span>
-          </div>
-          <div style={{display:'flex',alignItems:'center',gap:6}}>
+        {/* Masthead */}
+        <div style={{padding:'16px 14px 10px',borderBottom:'3px double var(--fg)',flexShrink:0,textAlign:'center'}}>
+          <div className="masthead-name" style={{fontSize:30,lineHeight:1}}>{APP.name}</div>
+          <div className="byline" style={{marginTop:5,display:'flex',alignItems:'center',justifyContent:'center',gap:6,letterSpacing:'0.08em',whiteSpace:'nowrap',fontSize:10}}>
             <div className="status-dot"/>
-            <span style={{fontSize:11,color:'var(--fg-4)',fontFamily:'JetBrains Mono,monospace',letterSpacing:'0.04em'}}>online · private · self-hosted</span>
+            <span>online · private · self-hosted</span>
           </div>
         </div>
 
         {/* New chat */}
         <div style={{padding:'10px 10px 2px',flexShrink:0}}>
-          <button onClick={startNew} className="btn-ghost-sm" style={{width:'100%',justifyContent:'flex-start',gap:8,padding:'9px 12px',borderRadius:7,border:'1px solid var(--bd-2)',color:'var(--fg-2)'}}>
+          <button onClick={startNew} className="btn-ghost-sm" style={{width:'100%',justifyContent:'flex-start',gap:8,padding:'9px 12px',borderRadius:0,border:'1px solid var(--bd-2)',color:'var(--fg-2)'}}>
             <Ico.Edit/> New conversation
           </button>
           <button onClick={()=>importRef.current?.click()} className="btn-ghost-sm" style={{width:'100%',justifyContent:'flex-start',gap:8,padding:'6px 12px',marginTop:4,fontSize:12,color:'var(--fg-4)'}}>
@@ -1024,7 +1106,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
           <div style={{position:'relative'}}>
             <svg style={{position:'absolute',left:10,top:'50%',transform:'translateY(-50%)',color:'var(--fg-4)',pointerEvents:'none'}} width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input ref={convSearchRef} value={convSearch} onChange={e=>setConvSearch(e.target.value)} placeholder="Search…"
-              style={{width:'100%',background:'var(--bg-2)',border:'1px solid var(--bd)',borderRadius:7,color:'var(--fg)',fontFamily:'Inter,sans-serif',fontSize:13,padding:'7px 10px 7px 30px',outline:'none',transition:'border-color .15s'}}
+              style={{width:'100%',background:'var(--bg-2)',border:'1px solid var(--bd)',borderRadius:0,color:'var(--fg)',fontFamily:'Newsreader,Georgia,serif',fontSize:13,padding:'7px 10px 7px 30px',outline:'none',transition:'border-color .15s'}}
               onFocus={e=>(e.target.style.borderColor='var(--bd-2)')} onBlur={e=>(e.target.style.borderColor='var(--bd)')}/>
           </div>
         </div>
@@ -1039,15 +1121,15 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
             <>
               {/* Folders */}
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 14px 2px'}}>
-                <span style={{fontSize:10,fontWeight:600,color:'var(--fg-4)',textTransform:'uppercase',letterSpacing:'0.1em',fontFamily:'JetBrains Mono,monospace'}}>Folders</span>
-                <button onClick={()=>setNewFolderOpen(o=>!o)} className="btn-ghost-sm" style={{padding:'2px 5px'}} title="New folder"><Ico.FolderPlus/></button>
+                <span style={{fontSize:10,fontWeight:600,color:'var(--fg-4)',textTransform:'uppercase',letterSpacing:'0.1em',fontFamily:"'Special Elite',monospace"}}>Folders</span>
+                <button onClick={()=>setNewFolderOpen(o=>!o)} className="btn-ghost-sm" style={{padding:'6px 7px'}} title="New folder" aria-label="New folder"><Ico.FolderPlus/></button>
               </div>
               {newFolderOpen && (
                 <div style={{padding:'2px 12px 6px'}}>
                   <input autoFocus value={newFolderName} onChange={e=>setNewFolderName(e.target.value)}
                     onKeyDown={e=>{if(e.key==='Enter')createFolderSubmit();if(e.key==='Escape'){setNewFolderOpen(false);setNewFolderName('');}}}
                     placeholder="Folder name, Enter to add"
-                    style={{width:'100%',background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:6,color:'var(--fg)',fontFamily:'Inter,sans-serif',fontSize:12.5,padding:'6px 9px',outline:'none'}}/>
+                    style={{width:'100%',background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:0,color:'var(--fg)',fontFamily:'Newsreader,Georgia,serif',fontSize:12.5,padding:'6px 9px'}}/>
                 </div>
               )}
               {folders.map(f=>{
@@ -1058,14 +1140,14 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
                     <div className="conv-item" style={{color:'var(--fg-3)'}}
                       onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background='var(--bg-2)'}
                       onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background='transparent'}>
-                      <button onClick={()=>setCollapsed(p=>({...p,[f.id]:!p[f.id]}))} className="btn-ghost-sm" style={{padding:'2px',flexShrink:0,color:'var(--fg-4)'}}>
+                      <button onClick={()=>setCollapsed(p=>({...p,[f.id]:!p[f.id]}))} aria-label={open?'Collapse folder':'Expand folder'} className="btn-ghost-sm" style={{padding:'5px 6px',flexShrink:0,color:'var(--fg-4)'}}>
                         <span style={{display:'inline-flex',transform:open?'rotate(0deg)':'rotate(-90deg)',transition:'transform .12s'}}><Ico.Down/></span>
                       </button>
                       <Ico.Folder/>
                       <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:13,marginLeft:2}}>{f.name}</span>
                       <span style={{fontSize:10.5,color:'var(--fg-4)',fontFamily:'JetBrains Mono,monospace'}}>{fc.length||''}</span>
-                      <button onClick={()=>{if(window.confirm(`Delete folder "${f.name}"? The chats inside move out, they are not deleted.`))deleteFolderUI(f.id);}} className="btn-ghost-sm" style={{padding:'2px 4px',color:'var(--err)',opacity:0,flexShrink:0}}
-                        onMouseEnter={e=>(e.currentTarget as HTMLElement).style.opacity='1'} onMouseLeave={e=>(e.currentTarget as HTMLElement).style.opacity='0'} title="Delete folder"><Ico.Trash/></button>
+                      <button onClick={()=>{if(window.confirm(`Delete folder "${f.name}"? The chats inside move out, they are not deleted.`))deleteFolderUI(f.id);}} className="btn-ghost-sm msg-actions" style={{padding:'6px 7px',color:'var(--err)',flexShrink:0}}
+                        onMouseEnter={e=>(e.currentTarget as HTMLElement).style.opacity='1'} onMouseLeave={e=>(e.currentTarget as HTMLElement).style.opacity=''} title="Delete folder" aria-label={`Delete folder ${f.name}`}><Ico.Trash/></button>
                     </div>
                     {open && fc.map(renderItem)}
                     {open && fc.length===0 && <p style={{padding:'2px 14px 6px 34px',fontSize:11.5,color:'var(--fg-4)'}}>Empty</p>}
@@ -1076,7 +1158,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
               {/* Pinned */}
               {pinnedConvs.length>0 && (
                 <div>
-                  <div style={{padding:'12px 14px 4px',fontSize:10,fontWeight:600,color:'var(--fg-4)',textTransform:'uppercase',letterSpacing:'0.1em',fontFamily:'JetBrains Mono,monospace'}}>Pinned</div>
+                  <div style={{padding:'12px 14px 4px',fontSize:10,fontWeight:600,color:'var(--fg-4)',textTransform:'uppercase',letterSpacing:'0.1em',fontFamily:"'Special Elite',monospace"}}>Pinned</div>
                   {pinnedConvs.map(renderItem)}
                 </div>
               )}
@@ -1084,7 +1166,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
               {/* Time-grouped, unfiled */}
               {grouped?.map(g=>(
                 <div key={g.l}>
-                  <div style={{padding:'12px 14px 4px',fontSize:10,fontWeight:600,color:'var(--fg-4)',textTransform:'uppercase',letterSpacing:'0.1em',fontFamily:'JetBrains Mono,monospace'}}>{g.l}</div>
+                  <div style={{padding:'12px 14px 4px',fontSize:10,fontWeight:600,color:'var(--fg-4)',textTransform:'uppercase',letterSpacing:'0.1em',fontFamily:"'Special Elite',monospace"}}>{g.l}</div>
                   {g.i.map(renderItem)}
                 </div>
               ))}
@@ -1092,7 +1174,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
               {/* Archived */}
               {archivedConvs.length>0 && (
                 <div>
-                  <button onClick={()=>setShowArchived(s=>!s)} className="btn-ghost-sm" style={{width:'100%',justifyContent:'flex-start',gap:6,padding:'12px 14px 6px',fontSize:10,fontWeight:600,color:'var(--fg-4)',textTransform:'uppercase',letterSpacing:'0.1em',fontFamily:'JetBrains Mono,monospace'}}>
+                  <button onClick={()=>setShowArchived(s=>!s)} className="btn-ghost-sm" style={{width:'100%',justifyContent:'flex-start',gap:6,padding:'12px 14px 6px',fontSize:10,fontWeight:600,color:'var(--fg-4)',textTransform:'uppercase',letterSpacing:'0.1em',fontFamily:"'Special Elite',monospace"}}>
                     <span style={{display:'inline-flex',transform:showArchived?'rotate(0deg)':'rotate(-90deg)',transition:'transform .12s'}}><Ico.Down/></span> Archived ({archivedConvs.length})
                   </button>
                   {showArchived && archivedConvs.map(renderItem)}
@@ -1115,10 +1197,10 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
               <div style={{display:'flex',gap:8,marginTop:2}}>
                 {user.isAdmin&&<Link href="/admin" style={{fontSize:11,color:'var(--g-text)',textDecoration:'none',fontFamily:'JetBrains Mono,monospace'}}>admin</Link>}
                 <Link href="/settings" style={{fontSize:11,color:'var(--fg-4)',textDecoration:'none'}}>settings</Link>
-                <button onClick={()=>setThemeOpen(true)} style={{fontSize:11,color:'var(--fg-4)',background:'none',border:'none',cursor:'pointer',padding:0,fontFamily:'Inter,sans-serif'}}>theme</button>
+                <button onClick={()=>setThemeOpen(true)} style={{fontSize:11,color:'var(--fg-4)',background:'none',border:'none',cursor:'pointer',padding:0,fontFamily:'Newsreader,Georgia,serif'}}>theme</button>
               </div>
             </div>
-            <button onClick={()=>signOut({callbackUrl:'/login'})} className="btn-ghost-sm" style={{padding:'5px 6px',flexShrink:0}} title="Sign out"><Ico.Logout/></button>
+            <button onClick={()=>signOut({callbackUrl:'/login'})} className="btn-ghost-sm" style={{padding:'7px 8px',flexShrink:0}} title="Sign out" aria-label="Sign out"><Ico.Logout/></button>
           </div>
         </div>
       </aside>
@@ -1128,16 +1210,16 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
 
         {/* Header */}
         <header style={{display:'flex',alignItems:'center',gap:8,padding:'0 16px',height:52,borderBottom:'1px solid var(--bd)',background:'var(--bg)',flexShrink:0}}>
-          <button onClick={()=>setSidebarOpen(o=>!o)} className="btn-ghost-sm" style={{padding:'6px 7px',marginLeft:-4,flexShrink:0}}><Ico.Menu/></button>
+          <button onClick={()=>setSidebarOpen(o=>!o)} aria-label="Toggle sidebar" className="btn-ghost-sm" style={{padding:'6px 7px',marginLeft:-4,flexShrink:0}}><Ico.Menu/></button>
 
           <div style={{flex:1,minWidth:0,overflow:'hidden',marginRight:8}}>
             {activeId
               ? editTitle
                 ? <input value={titleVal} onChange={e=>setTitleVal(e.target.value)} onBlur={saveTitle}
                     onKeyDown={e=>{if(e.key==='Enter')saveTitle();if(e.key==='Escape')setEditTitle(false);}}
-                    style={{fontSize:14,fontWeight:500,background:'transparent',border:'none',borderBottom:'1px solid var(--bd-2)',color:'var(--fg)',outline:'none',width:'100%',maxWidth:360,padding:'2px 0',fontFamily:'Inter,sans-serif'}} autoFocus/>
+                    style={{fontSize:14,fontWeight:500,background:'transparent',border:'none',borderBottom:'1px solid var(--bd-2)',color:'var(--fg)',width:'100%',maxWidth:360,padding:'2px 0',fontFamily:'Newsreader,Georgia,serif'}} autoFocus/>
                 : <button onClick={()=>{setEditTitle(true);setTitleVal(curConv?.title??'');}}
-                    style={{fontSize:14,fontWeight:500,color:'var(--fg)',background:'none',border:'none',cursor:'pointer',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:360,display:'block',textAlign:'left',fontFamily:'Inter,sans-serif',opacity:.9,padding:0}}
+                    style={{fontSize:14,fontWeight:500,color:'var(--fg)',background:'none',border:'none',cursor:'pointer',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',maxWidth:360,display:'block',textAlign:'left',fontFamily:'Newsreader,Georgia,serif',opacity:.9,padding:0}}
                     onMouseEnter={e=>(e.currentTarget as HTMLElement).style.opacity='0.65'}
                     onMouseLeave={e=>(e.currentTarget as HTMLElement).style.opacity='0.9'}>
                     {curConv?.title??'New conversation'}
@@ -1158,7 +1240,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
                 <div style={{position:'relative'}}>
                   <IcoBtn onClick={()=>setShowExport(o=>!o)} title="Export"><Ico.Dl/></IcoBtn>
                   {showExport&&(
-                    <div className="anim-scale-in" style={{position:'absolute',right:0,top:'100%',marginTop:6,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:8,boxShadow:'var(--sh-lg)',overflow:'hidden',minWidth:150}}>
+                    <div className="anim-scale-in" style={{position:'absolute',right:0,top:'100%',marginTop:6,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:0,boxShadow:'var(--sh-lg)',overflow:'hidden',minWidth:150}}>
                       {['md','json'].map(f=>(
                         <button key={f} onClick={()=>exportConv(f as 'md'|'json')} className="btn-ghost-sm"
                           style={{width:'100%',padding:'9px 14px',justifyContent:'flex-start',borderRadius:0,fontSize:13}}>
@@ -1176,7 +1258,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
 
         {/* Research indicator */}
         {researching&&(
-          <div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 20px',background:'rgba(34,197,94,0.05)',borderBottom:'1px solid var(--g-bd)',fontSize:13,color:'var(--g-text)',flexShrink:0}}>
+          <div style={{display:'flex',alignItems:'center',gap:10,padding:'10px 20px',background:'var(--g-dim)',borderBottom:'1px solid var(--g-bd)',fontSize:13,color:'var(--g-text)',flexShrink:0}}>
             <Typing/> Researching across multiple sources…
           </div>
         )}
@@ -1191,7 +1273,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
               </div>
             )}
             {msgs.map((m,i)=>(
-              <MsgBubble key={i} msg={{...m,id:m.dbId?.toString()}}
+              <MsgBubble key={i} msg={m}
                 onEdit={m.role==='user'&&!streaming?()=>handleEdit(i):undefined}
                 onRegen={m.role==='assistant'&&!streaming&&i===msgs.length-1?()=>handleRegen(i):undefined}
                 tts={tts} density={density} showStats={showStats} userInits={userInits}/>
@@ -1201,16 +1283,16 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
         </div>
 
         {/* Input */}
-        <div style={{flexShrink:0,padding:'10px 16px 14px',background:'var(--bg)'}}>
+        <div className="composer-wrap" style={{flexShrink:0,padding:'10px 16px 14px',background:'var(--bg)'}}>
           <div style={{maxWidth:740,margin:'0 auto'}}>
             {speech.listening&&speech.interimTranscript&&(
-              <div style={{background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:8,padding:'8px 12px',marginBottom:8,fontSize:13,color:'var(--fg-3)'}}>
+              <div style={{background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:0,padding:'8px 12px',marginBottom:8,fontSize:13,color:'var(--fg-3)'}}>
                 {speech.interimTranscript}
               </div>
             )}
 
             {toolsOpen&&(
-              <div className="anim-scale-in" style={{marginBottom:8,background:'var(--bg-1)',border:'1px solid var(--bd-2)',borderRadius:12,boxShadow:'var(--sh-lg)',overflow:'hidden'}}>
+              <div className="anim-scale-in" style={{marginBottom:8,background:'var(--bg-1)',border:'1px solid var(--bd-2)',borderRadius:0,boxShadow:'var(--sh-lg)',overflow:'hidden'}}>
                 <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 14px',borderBottom:'1px solid var(--bd)'}}>
                   <div style={{display:'flex',alignItems:'center',gap:8}}>
                     <Ico.Tool/><span style={{fontSize:13,fontWeight:600,color:'var(--fg)'}}>Tools</span>
@@ -1224,10 +1306,10 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
                         const on=toolIds.includes(t.name);
                         return (
                           <button key={t.name} onClick={()=>setToolIds(p=>p.includes(t.name)?p.filter(x=>x!==t.name):[...p,t.name])}
-                            style={{display:'flex',alignItems:'flex-start',gap:10,width:'100%',textAlign:'left',padding:'10px 14px',borderBottom:'1px solid var(--bd)',background:'transparent',border:'none',cursor:'pointer',fontFamily:'Inter,sans-serif'}}
+                            style={{display:'flex',alignItems:'flex-start',gap:10,width:'100%',textAlign:'left',padding:'10px 14px',borderBottom:'1px solid var(--bd)',background:'transparent',border:'none',cursor:'pointer',fontFamily:'Newsreader,Georgia,serif'}}
                             onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background='var(--bg-2)'}
                             onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background='transparent'}>
-                            <span style={{marginTop:1,width:16,height:16,borderRadius:4,border:`1.5px solid ${on?'var(--g)':'var(--bd-2)'}`,background:on?'var(--g)':'transparent',color:'#04100a',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>{on&&<Ico.Check/>}</span>
+                            <span style={{marginTop:1,width:16,height:16,borderRadius:0,border:`1.5px solid ${on?'var(--g)':'var(--bd-2)'}`,background:on?'var(--g)':'transparent',color:'var(--bg)',display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>{on&&<Ico.Check/>}</span>
                             <span style={{flex:1,minWidth:0}}>
                               <span style={{display:'block',fontSize:13,color:'var(--fg)',fontFamily:'JetBrains Mono,monospace'}}>{t.name}</span>
                               <span style={{display:'block',fontSize:11.5,color:'var(--fg-4)',marginTop:2,lineHeight:1.4}}>{t.description}</span>
@@ -1242,7 +1324,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
             )}
 
             {promptsOpen&&(
-              <div className="anim-scale-in" style={{marginBottom:8,background:'var(--bg-1)',border:'1px solid var(--bd-2)',borderRadius:12,boxShadow:'var(--sh-lg)',overflow:'hidden'}}>
+              <div className="anim-scale-in" style={{marginBottom:8,background:'var(--bg-1)',border:'1px solid var(--bd-2)',borderRadius:0,boxShadow:'var(--sh-lg)',overflow:'hidden'}}>
                 <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'10px 14px',borderBottom:'1px solid var(--bd)'}}>
                   <div style={{display:'flex',alignItems:'center',gap:8}}>
                     <Ico.Book/><span style={{fontSize:13,fontWeight:600,color:'var(--fg)'}}>Prompt library</span>
@@ -1256,11 +1338,11 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
                       <div key={p.id} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 14px',borderBottom:'1px solid var(--bd)',transition:'background .1s'}}
                         onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background='var(--bg-2)'}
                         onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background='transparent'}>
-                        <button onClick={()=>usePrompt(p.body)} style={{flex:1,minWidth:0,textAlign:'left',background:'none',border:'none',cursor:'pointer',fontFamily:'Inter,sans-serif',padding:0}}>
+                        <button onClick={()=>applyPrompt(p.body)} style={{flex:1,minWidth:0,textAlign:'left',background:'none',border:'none',cursor:'pointer',fontFamily:'Newsreader,Georgia,serif',padding:0}}>
                           <p style={{fontSize:13,color:'var(--fg)',margin:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.title}</p>
                           <p style={{fontSize:11,color:'var(--fg-4)',margin:'2px 0 0',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{p.body.slice(0,90)}</p>
                         </button>
-                        <button onClick={()=>deletePrompt(p.id)} className="btn-ghost-sm" style={{padding:'4px 6px',color:'var(--err)',flexShrink:0}} title="Delete prompt"><Ico.Trash/></button>
+                        <button onClick={()=>deletePrompt(p.id)} className="btn-ghost-sm" style={{padding:'6px 7px',color:'var(--err)',flexShrink:0}} title="Delete prompt" aria-label={`Delete prompt ${p.title}`}><Ico.Trash/></button>
                       </div>
                     ))
                   }
@@ -1268,8 +1350,8 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
               </div>
             )}
 
-            <div style={{background:'var(--bg-2)',border:`1px solid ${dragImg?'var(--g)':'var(--bd-2)'}`,borderRadius:12,transition:'border-color .15s, box-shadow .15s'}}
-              onFocusCapture={e=>{ const el=e.currentTarget as HTMLElement; el.style.borderColor='rgba(34,197,94,0.3)'; el.style.boxShadow='0 0 0 3px rgba(34,197,94,0.06)'; }}
+            <div style={{background:'var(--bg-2)',border:`1px solid ${dragImg?'var(--g)':'var(--bd-2)'}`,borderRadius:0,transition:'border-color .15s, box-shadow .15s'}}
+              onFocusCapture={e=>{ const el=e.currentTarget as HTMLElement; el.style.borderColor='var(--g-bd)'; el.style.boxShadow='0 0 0 3px var(--g-dim)'; }}
               onBlurCapture={e=>{ const el=e.currentTarget as HTMLElement; el.style.borderColor='var(--bd-2)'; el.style.boxShadow='none'; }}
               onDragOver={e=>{if(visionOk){e.preventDefault();setDragImg(true);}}}
               onDragLeave={()=>setDragImg(false)}
@@ -1277,11 +1359,11 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
               {images.length>0&&(
                 <div style={{display:'flex',gap:8,flexWrap:'wrap',padding:'12px 14px 0'}}>
                   {images.map((src,i)=>(
-                    <div key={i} style={{position:'relative',width:54,height:54,borderRadius:8,overflow:'hidden',border:'1px solid var(--bd-2)',flexShrink:0}}>
+                    <div key={i} style={{position:'relative',width:54,height:54,borderRadius:0,overflow:'hidden',border:'1px solid var(--bd-2)',flexShrink:0}}>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={src} alt="" style={{width:'100%',height:'100%',objectFit:'cover'}}/>
-                      <button onClick={()=>setImages(p=>p.filter((_,j)=>j!==i))} title="Remove"
-                        style={{position:'absolute',top:2,right:2,width:16,height:16,borderRadius:'50%',background:'rgba(0,0,0,0.6)',color:'#fff',border:'none',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0}}><Ico.X/></button>
+                      <button onClick={()=>setImages(p=>p.filter((_,j)=>j!==i))} title="Remove" aria-label="Remove image"
+                        style={{position:'absolute',top:1,right:1,width:24,height:24,borderRadius:'50%',background:'rgba(0,0,0,0.6)',color:'#fff',border:'none',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',padding:0}}><Ico.X/></button>
                     </div>
                   ))}
                 </div>
@@ -1291,8 +1373,8 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
                   onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleSend();}}}
                   onPaste={e=>{if(!visionOk)return;const imgs=Array.from(e.clipboardData.items).filter(it=>it.type.startsWith('image/')).map(it=>it.getAsFile()).filter((f):f is File=>!!f);if(imgs.length){e.preventDefault();addImages(imgs);}}}
                   rows={1} disabled={streaming}
-                  placeholder={`Message ${APP.name}…`}
-                  style={{width:'100%',background:'transparent',border:'none',outline:'none',resize:'none',color:'var(--fg)',fontFamily:'Inter,sans-serif',fontSize:15,lineHeight:1.7,minHeight:26,maxHeight:180}}
+                  placeholder={agentMode?'Tell the agent what to create…':`Message ${APP.name}…`}
+                  style={{width:'100%',background:'transparent',border:'none',outline:'none',resize:'none',color:'var(--fg)',fontFamily:'Newsreader,Georgia,serif',fontSize:15,lineHeight:1.7,minHeight:26,maxHeight:180}}
                   onInput={e=>{const el=e.currentTarget;el.style.height='auto';el.style.height=Math.min(el.scrollHeight,180)+'px';}}/>
               </div>
 
@@ -1312,7 +1394,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
                   )}
                   {speech.supported&&(
                     <button onClick={()=>speech.listening?speech.stop():speech.start()}
-                      style={{display:'inline-flex',alignItems:'center',gap:5,padding:'5px 10px',borderRadius:20,fontSize:12,fontWeight:500,fontFamily:'Inter,sans-serif',cursor:'pointer',border:`1px solid ${speech.listening?'rgba(248,113,113,.4)':'var(--bd-2)'}`,background:speech.listening?'rgba(248,113,113,.08)':'transparent',color:speech.listening?'var(--err)':'var(--fg-3)',transition:'all .15s'}}>
+                      style={{display:'inline-flex',alignItems:'center',gap:5,padding:'5px 10px',borderRadius:0,fontSize:12,fontWeight:500,fontFamily:'Newsreader,Georgia,serif',cursor:'pointer',border:`1px solid ${speech.listening?'rgba(248,113,113,.4)':'var(--bd-2)'}`,background:speech.listening?'rgba(248,113,113,.08)':'transparent',color:speech.listening?'var(--err)':'var(--fg-3)',transition:'all .15s'}}>
                       <Ico.Mic/>{speech.listening?'Listening…':'Voice'}
                     </button>
                   )}
@@ -1320,20 +1402,20 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
                 </div>
 
                 <div style={{display:'flex',alignItems:'center',gap:4,flexShrink:0}}>
-                  {tts.supported&&(
-                    <IcoBtn onClick={()=>tts.speaking?tts.stop():undefined} active={tts.speaking}><Ico.Vol/></IcoBtn>
+                  {tts.supported&&tts.speaking&&(
+                    <IcoBtn onClick={()=>tts.stop()} active={true} title="Stop reading"><Ico.Vol/></IcoBtn>
                   )}
                   {streaming
-                    ? <button onClick={()=>abortRef.current?.abort()}
-                        style={{width:34,height:34,borderRadius:8,background:'var(--bg-3)',border:'1px solid var(--bd-2)',color:'var(--fg-3)',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',transition:'background .12s',flexShrink:0}}
+                    ? <button onClick={()=>abortRef.current?.abort()} aria-label="Stop generating"
+                        style={{width:34,height:34,borderRadius:0,background:'var(--bg-3)',border:'1px solid var(--bd-2)',color:'var(--fg-3)',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',transition:'background .12s',flexShrink:0}}
                         onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background='var(--bg-4)'}
                         onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background='var(--bg-3)'}>
                         <Ico.Stop/>
                       </button>
-                    : <button onClick={handleSend} disabled={!canSend}
-                        style={{width:34,height:34,borderRadius:8,background:canSend?'var(--g)':'var(--bg-3)',color:canSend?'#04100a':'var(--fg-4)',display:'flex',alignItems:'center',justifyContent:'center',cursor:canSend?'pointer':'not-allowed',transition:'background .15s',border:'none',flexShrink:0,boxShadow:canSend?'0 0 0 1px rgba(34,197,94,.4), 0 2px 8px rgba(34,197,94,.15)':'none'}}
-                        onMouseEnter={e=>{if(canSend)(e.currentTarget as HTMLElement).style.background='#16a34a';}}
-                        onMouseLeave={e=>{if(canSend)(e.currentTarget as HTMLElement).style.background='var(--g)';}}>
+                    : <button onClick={handleSend} disabled={!canSend} aria-label="Send message"
+                        style={{width:34,height:34,borderRadius:0,background:canSend?'var(--fg)':'var(--bg-3)',color:canSend?'var(--bg)':'var(--fg-4)',display:'flex',alignItems:'center',justifyContent:'center',cursor:canSend?'pointer':'not-allowed',transition:'background .15s',border:canSend?'1px solid var(--fg)':'1px solid var(--bd-2)',flexShrink:0,boxShadow:'none'}}
+                        onMouseEnter={e=>{if(canSend)(e.currentTarget as HTMLElement).style.background='var(--g)';}}
+                        onMouseLeave={e=>{if(canSend)(e.currentTarget as HTMLElement).style.background='var(--fg)';}}>
                         <Ico.Send/>
                       </button>
                   }
@@ -1341,18 +1423,30 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
               </div>
             </div>
 
-            <p style={{textAlign:'center',marginTop:8,fontSize:11,color:'var(--fg-4)',fontFamily:'JetBrains Mono,monospace',letterSpacing:'0.02em'}}>
+            <p className="byline" style={{textAlign:'center',marginTop:8}}>
               {APP.name} can make mistakes. Double check anything that matters.
             </p>
           </div>
         </div>
       </div>
 
+      {/* ── Agent Workspace panel ─────────────────────────────────────────── */}
+      <AgentWorkspace
+        ref={workspaceRef}
+        conversationId={activeId}
+        agentMode={agentMode}
+        onToggleAgentMode={()=>setAgentMode(p=>!p)}
+        onNewConversation={(id)=>{
+          setActiveId(id);
+          setConvs(p=>[{id,title:'Agent session',model:modelId||'chakor',created_at:Math.floor(Date.now()/1000),updated_at:Math.floor(Date.now()/1000)},...p]);
+        }}
+      />
+
       {docsOpen&&<DocsPanel docs={docs} uploading={uploading} uploadError={uploadErr} onUpload={uploadDoc} onDelete={deleteDoc} onClose={()=>setDocsOpen(false)}/>}
       <ThemeEditor open={themeOpen} onClose={()=>setThemeOpen(false)}/>
       {showExport&&<div style={{position:'fixed',inset:0,zIndex:40}} onClick={()=>setShowExport(false)}/>}
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } } @media (max-width: 767px) { .anim-fade-up { animation-delay: 0s !important; } }`}</style>
+      <style>{`@media (max-width: 767px) { .anim-fade-up { animation-delay: 0s !important; } }`}</style>
     </div>
   );
 }

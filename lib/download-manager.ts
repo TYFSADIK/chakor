@@ -10,6 +10,8 @@
 import { createWriteStream, promises as fs } from 'node:fs';
 import path from 'node:path';
 import { primaryModelsDir } from './local-llama';
+import { idleWatchdog } from './llama';
+import { logger, errText } from './logger';
 import {
   resolveDownloadSet,
   resolveFileUrl,
@@ -46,6 +48,7 @@ interface JobInternal extends DownloadJob {
 
 const MMPROJ_RE = /mmproj/i;
 const KEEP_FINISHED_MS = 10 * 60 * 1000; // show completed/failed jobs for 10 min
+const STALL_MS = 60_000; // fail a download that delivers no bytes for 60s
 
 class DownloadManager {
   private jobs = new Map<string, JobInternal>();
@@ -115,7 +118,23 @@ class DownloadManager {
     try {
       await fs.mkdir(job.destDir, { recursive: true });
       const mainRepoFile = job.paths.find((p) => !MMPROJ_RE.test(path.basename(p))) ?? job.paths[0];
-      job.path = path.join(job.destDir, path.basename(mainRepoFile));
+      const mainFinalPath = path.join(job.destDir, path.basename(mainRepoFile));
+
+      // Fail fast when the disk can't hold the set — a multi-GB write that dies
+      // at 90% wastes a lot of time and bandwidth. If statfs itself is
+      // unavailable, log and proceed rather than block the download.
+      if (job.total > 0) {
+        try {
+          const st = await fs.statfs(job.destDir);
+          const free = Number(st.bavail) * Number(st.bsize);
+          if (free < job.total) {
+            throw new Error(`Not enough disk space: need ~${(job.total / 1e9).toFixed(1)} GB, only ~${(free / 1e9).toFixed(1)} GB free.`);
+          }
+        } catch (e) {
+          if (e instanceof Error && e.message.startsWith('Not enough disk space')) throw e;
+          logger.warn('disk space check unavailable', { dir: job.destDir, err: errText(e) });
+        }
+      }
 
       for (const repoFile of job.paths) {
         const name = path.basename(repoFile);
@@ -123,37 +142,50 @@ class DownloadManager {
         const partPath = `${finalPath}.part`;
 
         // Already downloaded fully? Skip (cheap resume across the file set).
+        // Documented limitation: no HTTP Range resume WITHIN a file — a failed
+        // file restarts from zero.
         try {
           const st = await fs.stat(finalPath);
           if (st.size > 0) { doneBytes += st.size; this.tick(job, doneBytes); continue; }
         } catch { /* not present */ }
 
-        const res = await fetch(resolveFileUrl(job.repo, repoFile), { headers: hfHeaders(), signal: job.abort.signal });
-        if (!res.ok || !res.body) throw new Error(`Hugging Face ${res.status} for ${name}`);
-
-        const ws = createWriteStream(partPath);
-        const reader = res.body.getReader();
-        let fileBytes = 0;
+        // Stall watchdog: abort if no bytes arrive for 60s so a wedged TCP
+        // connection can't hang a multi-GB job forever at its last speedBps.
+        const wd = idleWatchdog(job.abort.signal, STALL_MS);
         try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            if (!ws.write(Buffer.from(value))) await new Promise<void>((r) => ws.once('drain', r));
-            fileBytes += value.length;
-            this.tick(job, doneBytes + fileBytes);
+          const res = await fetch(resolveFileUrl(job.repo, repoFile), { headers: hfHeaders(), signal: wd.signal });
+          if (!res.ok || !res.body) throw new Error(`Hugging Face ${res.status} for ${name}`);
+
+          const ws = createWriteStream(partPath);
+          const reader = res.body.getReader();
+          let fileBytes = 0;
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              wd.reset();
+              if (!ws.write(Buffer.from(value))) await new Promise<void>((r) => ws.once('drain', r));
+              fileBytes += value.length;
+              this.tick(job, doneBytes + fileBytes);
+            }
+            await new Promise<void>((resolve, reject) => ws.end((err?: Error | null) => (err ? reject(err) : resolve())));
+          } catch (e) {
+            ws.destroy();
+            await fs.rm(partPath, { force: true });
+            throw e;
           }
-          await new Promise<void>((resolve, reject) => ws.end((err?: Error | null) => (err ? reject(err) : resolve())));
-        } catch (e) {
-          ws.destroy();
-          await fs.rm(partPath, { force: true });
-          throw e;
+          await fs.rename(partPath, finalPath);
+          doneBytes += fileBytes;
+          this.tick(job, doneBytes);
+        } finally {
+          wd.done();
         }
-        await fs.rename(partPath, finalPath);
-        doneBytes += fileBytes;
-        this.tick(job, doneBytes);
       }
 
       job.status = 'done';
+      // Only advertise the final path once every byte is on disk — a failed job
+      // must never point at a file that doesn't exist.
+      job.path = mainFinalPath;
       job.downloaded = job.total || doneBytes;
       job.pct = 100;
       job.speedBps = 0;
@@ -164,6 +196,7 @@ class DownloadManager {
       job.status = aborted ? 'cancelled' : 'error';
       job.error = aborted ? null : (e instanceof Error ? e.message : 'Download failed.');
       job.finishedAt = Date.now();
+      if (!aborted) logger.error('download failed', { repo: job.repo, file: job.file, err: errText(e) });
       // Tidy any partial file from the file we were on.
       await fs.rm(path.join(job.destDir, `${job.name}.part`), { force: true }).catch(() => {});
     }

@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { APP } from '@/lib/config';
 
 type Item = { text: string; done: boolean };
 type Note = {
@@ -10,13 +9,17 @@ type Note = {
   pinned: number; archived: number; items?: Item[]; created_at: number; updated_at: number;
 };
 
+/* Index-card stocks. Tints derive from the edition inks so both the
+   morning and midnight editions stay legible. Keys are stored in the
+   database, so they must not change. */
+const tint = (v: string, pct: number) => `color-mix(in srgb, ${v} ${pct}%, transparent)`;
 const COLORS = [
-  { key: '', bg: 'var(--bg-1)', bd: 'var(--bd)', dot: 'var(--bg-3)' },
-  { key: 'green', bg: 'rgba(34,197,94,0.10)', bd: 'rgba(34,197,94,0.28)', dot: '#22c55e' },
-  { key: 'blue', bg: 'rgba(59,130,246,0.10)', bd: 'rgba(59,130,246,0.28)', dot: '#3b82f6' },
-  { key: 'amber', bg: 'rgba(245,158,11,0.10)', bd: 'rgba(245,158,11,0.28)', dot: '#f59e0b' },
-  { key: 'rose', bg: 'rgba(244,63,94,0.10)', bd: 'rgba(244,63,94,0.28)', dot: '#f43f5e' },
-  { key: 'violet', bg: 'rgba(139,92,246,0.10)', bd: 'rgba(139,92,246,0.28)', dot: '#8b5cf6' },
+  { key: '', bg: 'var(--bg-1)', bd: 'var(--bd)', dot: 'var(--bg-4)' },
+  { key: 'green', bg: tint('var(--ok)', 10), bd: tint('var(--ok)', 32), dot: 'var(--ok)' },
+  { key: 'blue', bg: tint('var(--cyan)', 10), bd: tint('var(--cyan)', 32), dot: 'var(--cyan)' },
+  { key: 'amber', bg: tint('var(--warn)', 12), bd: tint('var(--warn)', 34), dot: 'var(--warn)' },
+  { key: 'rose', bg: 'var(--g-dim)', bd: 'var(--g-bd)', dot: 'var(--g)' },
+  { key: 'violet', bg: tint('var(--fg-3)', 10), bd: tint('var(--fg-3)', 30), dot: 'var(--fg-3)' },
 ];
 const colorOf = (k: string | null) => COLORS.find((c) => c.key === (k ?? '')) ?? COLORS[0];
 
@@ -35,7 +38,7 @@ function Dots({ value, onPick }: { value: string; onPick: (k: string) => void })
     <div style={{ display: 'flex', gap: 6 }}>
       {COLORS.map((c) => (
         <button key={c.key} onClick={() => onPick(c.key)} title={c.key || 'default'}
-          style={{ width: 18, height: 18, borderRadius: '50%', background: c.dot, border: value === c.key ? '2px solid var(--fg)' : '1px solid var(--bd-2)', cursor: 'pointer', padding: 0 }} />
+          style={{ width: 16, height: 16, borderRadius: 0, background: c.dot, border: value === c.key ? '2px solid var(--fg)' : '1px solid var(--bd-2)', cursor: 'pointer', padding: 0 }} />
       ))}
     </div>
   );
@@ -44,6 +47,7 @@ function Dots({ value, onPick }: { value: string; onPick: (k: string) => void })
 export default function Notes({ initialNotes }: { initialNotes: Note[] }) {
   const [notes, setNotes] = useState<Note[]>(initialNotes);
   const [showArchived, setShowArchived] = useState(false);
+  const [err, setErr] = useState('');
 
   // Composer
   const [cTitle, setCTitle] = useState('');
@@ -66,29 +70,36 @@ export default function Notes({ initialNotes }: { initialNotes: Note[] }) {
       : { title: cTitle.trim(), body: cBody.trim(), color: cColor || null };
     try {
       const r = await fetch('/api/notes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      const note = await r.json();
-      if (r.ok && note?.id) setNotes((p) => [note, ...p]);
-    } catch { /* non-fatal */ }
-    resetComposer();
+      const note = await r.json().catch(() => null);
+      if (r.ok && note?.id) { setNotes((p) => [note, ...p]); setErr(''); resetComposer(); }
+      else setErr('Could not save note, your text is still here, try again');
+    } catch { setErr('Could not save note, your text is still here, try again'); }
   }
   function resetComposer() { setCTitle(''); setCBody(''); setCItems([]); setCNewItem(''); setCChecklist(false); setCColor(''); }
 
-  async function patch(id: string, fields: Record<string, unknown>) {
+  async function patch(id: string, fields: Record<string, unknown>): Promise<boolean> {
     try {
       const r = await fetch(`/api/notes/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields) });
-      const note = await r.json();
-      if (r.ok && note?.id) setNotes((p) => p.map((n) => (n.id === id ? note : n)));
-    } catch { /* non-fatal */ }
+      const note = await r.json().catch(() => null);
+      if (r.ok && note?.id) { setNotes((p) => p.map((n) => (n.id === id ? note : n))); setErr(''); return true; }
+    } catch { /* fall through */ }
+    setErr('Could not save changes, please try again');
+    return false;
   }
   async function remove(id: string) {
-    await fetch(`/api/notes/${id}`, { method: 'DELETE' }).catch(() => {});
-    setNotes((p) => p.filter((n) => n.id !== id));
-    if (editing?.id === id) setEditing(null);
+    if (!window.confirm('Delete this note? This cannot be undone.')) return;
+    try {
+      const r = await fetch(`/api/notes/${id}`, { method: 'DELETE' });
+      if (!r.ok) throw new Error();
+      setNotes((p) => p.filter((n) => n.id !== id));
+      if (editing?.id === id) setEditing(null);
+      setErr('');
+    } catch { setErr('Could not delete note, please try again'); }
   }
-  function toggleItem(n: Note, idx: number) {
+  async function toggleItem(n: Note, idx: number) {
     const items = (n.items ?? []).map((it, i) => (i === idx ? { ...it, done: !it.done } : it));
     setNotes((p) => p.map((x) => (x.id === n.id ? { ...x, items } : x)));
-    patch(n.id, { items });
+    if (!await patch(n.id, { items })) setNotes((p) => p.map((x) => (x.id === n.id ? { ...x, items: n.items } : x)));
   }
 
   function openEdit(n: Note) {
@@ -100,8 +111,7 @@ export default function Notes({ initialNotes }: { initialNotes: Note[] }) {
     const fields: Record<string, unknown> = { title: buf.title.trim(), color: buf.color || null };
     if (buf.items) fields.items = buf.items.filter((i) => i.text.trim());
     else fields.body = buf.body.trim();
-    await patch(editing.id, fields);
-    setEditing(null);
+    if (await patch(editing.id, fields)) setEditing(null);
   }
 
   const visible = notes.filter((n) => (showArchived ? n.archived : !n.archived));
@@ -111,21 +121,21 @@ export default function Notes({ initialNotes }: { initialNotes: Note[] }) {
   const card = (n: Note) => {
     const c = colorOf(n.color);
     return (
-      <div key={n.id} className="note-card" style={{ breakInside: 'avoid', marginBottom: 14, background: c.bg, border: `1px solid ${c.bd}`, borderRadius: 12, padding: '13px 15px', cursor: 'pointer', position: 'relative' }}
+      <div key={n.id} className="note-card" style={{ breakInside: 'avoid', marginBottom: 14, background: c.bg, border: `1px solid ${c.bd}`, borderTop: '3px double var(--fg)', borderRadius: 0, padding: '13px 15px', cursor: 'pointer', position: 'relative', boxShadow: 'var(--sh)' }}
         onClick={() => openEdit(n)}>
-        {n.title && <p style={{ fontSize: 14.5, fontWeight: 600, color: 'var(--fg)', marginBottom: n.body || n.items ? 7 : 0, wordBreak: 'break-word' }}>{n.title}</p>}
+        {n.title && <p className="font-display" style={{ fontSize: 15.5, fontWeight: 700, color: 'var(--fg)', marginBottom: n.body || n.items ? 7 : 0, paddingBottom: n.body || n.items ? 6 : 0, borderBottom: n.body || n.items ? '1px solid var(--bd)' : 'none', wordBreak: 'break-word' }}>{n.title}</p>}
         {n.items
           ? <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
               {n.items.slice(0, 12).map((it, i) => (
                 <div key={i} onClick={(e) => { e.stopPropagation(); toggleItem(n, i); }} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
-                  <span style={{ marginTop: 1, width: 15, height: 15, borderRadius: 4, flexShrink: 0, border: `1.5px solid ${it.done ? 'var(--g)' : 'var(--bd-2)'}`, background: it.done ? 'var(--g)' : 'transparent', color: '#04100a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{it.done && <I.Check />}</span>
+                  <span style={{ marginTop: 1, width: 15, height: 15, borderRadius: 0, flexShrink: 0, border: `1.5px solid ${it.done ? 'var(--g)' : 'var(--bd-2)'}`, background: it.done ? 'var(--g)' : 'transparent', color: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{it.done && <I.Check />}</span>
                   <span style={{ fontSize: 13.5, color: it.done ? 'var(--fg-4)' : 'var(--fg-2)', textDecoration: it.done ? 'line-through' : 'none', wordBreak: 'break-word' }}>{it.text}</span>
                 </div>
               ))}
             </div>
           : n.body && <p style={{ fontSize: 13.5, color: 'var(--fg-2)', whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.55 }}>{n.body.slice(0, 600)}</p>}
 
-        <div className="note-tools" style={{ display: 'flex', alignItems: 'center', gap: 2, marginTop: 10 }} onClick={(e) => e.stopPropagation()}>
+        <div className="note-tools" style={{ display: 'flex', alignItems: 'center', gap: 2, marginTop: 10, borderTop: '1px solid var(--bd)', paddingTop: 6 }} onClick={(e) => e.stopPropagation()}>
           <button onClick={() => patch(n.id, { pinned: !n.pinned })} title={n.pinned ? 'Unpin' : 'Pin'} className="btn-ghost-sm" style={{ padding: '4px 5px', color: n.pinned ? 'var(--g)' : 'var(--fg-4)' }}><I.Pin /></button>
           <button onClick={() => patch(n.id, { archived: !n.archived })} title={n.archived ? 'Unarchive' : 'Archive'} className="btn-ghost-sm" style={{ padding: '4px 5px', color: 'var(--fg-4)' }}><I.Archive /></button>
           <button onClick={() => remove(n.id)} title="Delete" className="btn-ghost-sm" style={{ padding: '4px 5px', color: 'var(--err)', marginLeft: 'auto' }}><I.Trash /></button>
@@ -135,33 +145,35 @@ export default function Notes({ initialNotes }: { initialNotes: Note[] }) {
   };
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'Inter,sans-serif' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--fg)' }}>
       <style>{`.note-card .note-tools{opacity:0;transition:opacity .15s}.note-card:hover .note-tools{opacity:1}@media(hover:none){.note-card .note-tools{opacity:1}}`}</style>
 
-      <header style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 18px', height: 54, borderBottom: '1px solid var(--bd)', position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 10 }}>
-        <Link href="/" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--fg-3)', textDecoration: 'none' }}>
+      <header style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 18px', height: 54, borderBottom: '3px double var(--fg)', position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 10 }}>
+        <Link href="/" className="byline" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none' }}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="15 18 9 12 15 6" /></svg>
           Chat
         </Link>
-        <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: '0.04em' }}>NOTES</span>
+        <span className="kicker" style={{ fontSize: 13 }}>Notes Desk</span>
         <button onClick={() => setShowArchived((s) => !s)} className="btn-ghost-sm" style={{ marginLeft: 'auto', fontSize: 12.5, padding: '6px 10px', color: showArchived ? 'var(--g-text)' : 'var(--fg-3)' }}>
           {showArchived ? 'Active notes' : 'Archived'}
         </button>
       </header>
 
       <div style={{ maxWidth: 1100, margin: '0 auto', padding: '22px 18px 60px' }}>
+        {err && <p style={{ maxWidth: 560, margin: '0 auto 14px', fontSize: 13, color: 'var(--err)' }}>{err}</p>}
         {/* Composer */}
         {!showArchived && (
-          <div style={{ maxWidth: 560, margin: '0 auto 26px', background: colorOf(cColor).bg, border: `1px solid ${colorOf(cColor).bd}`, borderRadius: 12, padding: '12px 14px' }}>
-            <input value={cTitle} onChange={(e) => setCTitle(e.target.value)} placeholder="Title"
-              style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: 'var(--fg)', fontFamily: 'Inter,sans-serif', fontSize: 15, fontWeight: 600, marginBottom: 8 }} />
+          <div style={{ maxWidth: 560, margin: '0 auto 26px', background: colorOf(cColor).bg, border: `1px solid ${colorOf(cColor).bd}`, borderTop: '3px double var(--fg)', borderRadius: 0, padding: '12px 14px', boxShadow: 'var(--sh)' }}>
+            <input value={cTitle} onChange={(e) => setCTitle(e.target.value)} placeholder="Headline"
+              className="font-display"
+              style={{ width: '100%', background: 'transparent', border: 'none', borderBottom: '1px solid var(--bd)', outline: 'none', color: 'var(--fg)', fontSize: 16, fontWeight: 700, marginBottom: 8, paddingBottom: 6 }} />
             {cChecklist ? (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 10 }}>
                 {cItems.map((it, i) => (
                   <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ width: 15, height: 15, borderRadius: 4, border: '1.5px solid var(--bd-2)', flexShrink: 0 }} />
+                    <span style={{ width: 15, height: 15, borderRadius: 0, border: '1.5px solid var(--bd-2)', flexShrink: 0 }} />
                     <input value={it.text} onChange={(e) => setCItems((p) => p.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)))}
-                      style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'var(--fg-2)', fontSize: 13.5, fontFamily: 'Inter,sans-serif' }} />
+                      style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'var(--fg-2)', fontSize: 13.5 }} />
                     <button onClick={() => setCItems((p) => p.filter((_, j) => j !== i))} className="btn-ghost-sm" style={{ padding: '2px 4px', color: 'var(--fg-4)' }}><I.X /></button>
                   </div>
                 ))}
@@ -170,17 +182,17 @@ export default function Notes({ initialNotes }: { initialNotes: Note[] }) {
                   <input value={cNewItem} onChange={(e) => setCNewItem(e.target.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter' && cNewItem.trim()) { setCItems((p) => [...p, { text: cNewItem.trim(), done: false }]); setCNewItem(''); } }}
                     placeholder="List item, Enter to add"
-                    style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'var(--fg-2)', fontSize: 13.5, fontFamily: 'Inter,sans-serif' }} />
+                    style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'var(--fg-2)', fontSize: 13.5 }} />
                 </div>
               </div>
             ) : (
               <textarea value={cBody} onChange={(e) => setCBody(e.target.value)} placeholder="Take a note…" rows={2}
-                style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', resize: 'vertical', color: 'var(--fg-2)', fontFamily: 'Inter,sans-serif', fontSize: 14, lineHeight: 1.55, marginBottom: 10, minHeight: 38 }} />
+                style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', resize: 'vertical', color: 'var(--fg-2)', fontSize: 14, lineHeight: 1.55, marginBottom: 10, minHeight: 38 }} />
             )}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', borderTop: '1px solid var(--bd)', paddingTop: 10 }}>
               <button onClick={() => setCChecklist((v) => !v)} title="Checklist" className="btn-ghost-sm" style={{ padding: '5px 7px', color: cChecklist ? 'var(--g)' : 'var(--fg-4)' }}><I.List /></button>
               <Dots value={cColor} onPick={setCColor} />
-              <button onClick={create} style={{ marginLeft: 'auto', padding: '7px 18px', borderRadius: 8, background: 'var(--g)', color: '#04100a', border: 'none', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'Inter,sans-serif' }}>Add note</button>
+              <button onClick={create} className="btn btn-green" style={{ marginLeft: 'auto', padding: '8px 18px' }}>Add note</button>
             </div>
           </div>
         )}
@@ -188,15 +200,21 @@ export default function Notes({ initialNotes }: { initialNotes: Note[] }) {
         {/* Pinned */}
         {pinned.length > 0 && (
           <>
-            <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'JetBrains Mono,monospace', marginBottom: 10 }}>Pinned</p>
+            <p className="kicker" style={{ marginBottom: 10 }}>Pinned</p>
+            <hr className="rule-thin" style={{ marginBottom: 14 }} />
             <div style={{ columnWidth: 240, columnGap: 14, marginBottom: 24 }}>{pinned.map(card)}</div>
           </>
         )}
-        {pinned.length > 0 && others.length > 0 && <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'JetBrains Mono,monospace', marginBottom: 10 }}>Others</p>}
+        {pinned.length > 0 && others.length > 0 && (
+          <>
+            <p className="kicker" style={{ marginBottom: 10 }}>Others</p>
+            <hr className="rule-thin" style={{ marginBottom: 14 }} />
+          </>
+        )}
         <div style={{ columnWidth: 240, columnGap: 14 }}>{others.map(card)}</div>
 
         {visible.length === 0 && (
-          <p style={{ textAlign: 'center', fontSize: 14, color: 'var(--fg-4)', padding: '50px 0' }}>
+          <p className="font-fell" style={{ textAlign: 'center', fontSize: 16, color: 'var(--fg-4)', padding: '50px 0' }}>
             {showArchived ? 'No archived notes.' : 'No notes yet. Jot one down above.'}
           </p>
         )}
@@ -206,18 +224,19 @@ export default function Notes({ initialNotes }: { initialNotes: Note[] }) {
       {editing && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
           <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.55)' }} onClick={saveEdit} />
-          <div className="anim-scale-in" style={{ position: 'relative', zIndex: 1, width: '100%', maxWidth: 540, maxHeight: '85vh', display: 'flex', flexDirection: 'column', background: colorOf(buf.color).bg, border: `1px solid ${colorOf(buf.color).bd}`, borderRadius: 14, boxShadow: 'var(--sh-lg)' }}>
+          <div className="anim-scale-in" style={{ position: 'relative', zIndex: 1, width: '100%', maxWidth: 540, maxHeight: '85vh', display: 'flex', flexDirection: 'column', background: colorOf(buf.color).bg, border: `1px solid ${colorOf(buf.color).bd}`, borderTop: '3px double var(--fg)', borderRadius: 0, boxShadow: 'var(--sh-lg)' }}>
             <div style={{ padding: '16px 18px 10px', overflowY: 'auto' }}>
-              <input value={buf.title} onChange={(e) => setBuf((b) => ({ ...b, title: e.target.value }))} placeholder="Title"
-                style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: 'var(--fg)', fontFamily: 'Inter,sans-serif', fontSize: 17, fontWeight: 700, marginBottom: 10 }} autoFocus />
+              <input value={buf.title} onChange={(e) => setBuf((b) => ({ ...b, title: e.target.value }))} placeholder="Headline"
+                className="font-display"
+                style={{ width: '100%', background: 'transparent', border: 'none', borderBottom: '1px solid var(--bd)', outline: 'none', color: 'var(--fg)', fontSize: 18, fontWeight: 700, marginBottom: 10, paddingBottom: 8 }} autoFocus />
               {buf.items ? (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
                   {buf.items.map((it, i) => (
                     <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
                       <button onClick={() => setBuf((b) => ({ ...b, items: b.items!.map((x, j) => (j === i ? { ...x, done: !x.done } : x)) }))}
-                        style={{ width: 17, height: 17, borderRadius: 4, flexShrink: 0, border: `1.5px solid ${it.done ? 'var(--g)' : 'var(--bd-2)'}`, background: it.done ? 'var(--g)' : 'transparent', color: '#04100a', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>{it.done && <I.Check />}</button>
+                        style={{ width: 17, height: 17, borderRadius: 0, flexShrink: 0, border: `1.5px solid ${it.done ? 'var(--g)' : 'var(--bd-2)'}`, background: it.done ? 'var(--g)' : 'transparent', color: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>{it.done && <I.Check />}</button>
                       <input value={it.text} onChange={(e) => setBuf((b) => ({ ...b, items: b.items!.map((x, j) => (j === i ? { ...x, text: e.target.value } : x)) }))}
-                        style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: it.done ? 'var(--fg-4)' : 'var(--fg-2)', textDecoration: it.done ? 'line-through' : 'none', fontSize: 14, fontFamily: 'Inter,sans-serif' }} />
+                        style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: it.done ? 'var(--fg-4)' : 'var(--fg-2)', textDecoration: it.done ? 'line-through' : 'none', fontSize: 14 }} />
                       <button onClick={() => setBuf((b) => ({ ...b, items: b.items!.filter((_, j) => j !== i) }))} className="btn-ghost-sm" style={{ padding: '3px 5px', color: 'var(--fg-4)' }}><I.X /></button>
                     </div>
                   ))}
@@ -225,13 +244,13 @@ export default function Notes({ initialNotes }: { initialNotes: Note[] }) {
                 </div>
               ) : (
                 <textarea value={buf.body} onChange={(e) => setBuf((b) => ({ ...b, body: e.target.value }))} placeholder="Note…"
-                  style={{ width: '100%', minHeight: 160, background: 'transparent', border: 'none', outline: 'none', resize: 'vertical', color: 'var(--fg-2)', fontFamily: 'Inter,sans-serif', fontSize: 14.5, lineHeight: 1.6 }} />
+                  style={{ width: '100%', minHeight: 160, background: 'transparent', border: 'none', outline: 'none', resize: 'vertical', color: 'var(--fg-2)', fontSize: 14.5, lineHeight: 1.6 }} />
               )}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 18px', borderTop: '1px solid var(--bd)', flexWrap: 'wrap' }}>
               <Dots value={buf.color} onPick={(k) => setBuf((b) => ({ ...b, color: k }))} />
               <button onClick={() => remove(editing.id)} className="btn-ghost-sm" style={{ fontSize: 12.5, padding: '6px 8px', color: 'var(--err)', gap: 6 }}><I.Trash /> Delete</button>
-              <button onClick={saveEdit} style={{ marginLeft: 'auto', padding: '8px 20px', borderRadius: 8, background: 'var(--g)', color: '#04100a', border: 'none', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'Inter,sans-serif' }}>Done</button>
+              <button onClick={saveEdit} className="btn btn-green" style={{ marginLeft: 'auto', padding: '8px 20px' }}>Done</button>
             </div>
           </div>
         </div>

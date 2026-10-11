@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { ChakorWordmark } from '@/components/LoginForm';
 import { APP } from '@/lib/config';
+import { ACCENTS, DEFAULT_ACCENT, applyAccent, saveAccent, loadAccent } from '@/lib/theme';
 
 type Tab = 'profile' | 'preferences' | 'appearance' | 'developer' | 'models';
 type Model = { id: string; name: string; provider: string; contextWindow: number; badge?: string };
@@ -24,18 +25,21 @@ type HfFile = { path: string; size: number; label: string; quant: string | null;
 type SystemStatus = { hardware: Hardware; hardwareSummary: string; engines: Engine[]; localModels?: (LocalModel & { fit: ModelFit; maxCtx: number })[]; recommended?: string | null };
 type DownloadJob = { id: string; repo: string; file: string; name: string; status: 'downloading' | 'done' | 'error' | 'cancelled'; total: number; downloaded: number; pct: number; speedBps: number; etaSec: number | null; error: string | null };
 
+const TYPE_FONT = "'Special Elite', 'JetBrains Mono', monospace";
+const MONO_FONT = "'JetBrains Mono', monospace";
+
 const FIT_STYLE: Record<FitLevel, { label: string; bg: string; bd: string; fg: string }> = {
-  fits:    { label: 'FITS',    bg: 'var(--g-dim)',          bd: 'var(--g-bd)',            fg: 'var(--g-text)' },
-  tight:   { label: 'TIGHT',   bg: 'rgba(251,191,36,.1)',   bd: 'rgba(251,191,36,.35)',   fg: '#e0a32e' },
-  too_big: { label: 'TOO BIG', bg: 'rgba(248,113,113,.1)',  bd: 'rgba(248,113,113,.35)',  fg: 'var(--err)' },
-  unknown: { label: '',        bg: 'var(--bg-3)',           bd: 'var(--bd-2)',            fg: 'var(--fg-4)' },
+  fits:    { label: 'FITS',    bg: 'var(--g-dim)',  bd: 'var(--g-bd)',   fg: 'var(--g-text)' },
+  tight:   { label: 'TIGHT',   bg: 'color-mix(in srgb, var(--warn) 10%, transparent)', bd: 'color-mix(in srgb, var(--warn) 40%, transparent)', fg: 'var(--warn)' },
+  too_big: { label: 'TOO BIG', bg: 'color-mix(in srgb, var(--err) 10%, transparent)',  bd: 'color-mix(in srgb, var(--err) 40%, transparent)',  fg: 'var(--err)' },
+  unknown: { label: '',        bg: 'var(--bg-3)',   bd: 'var(--bd-2)',   fg: 'var(--fg-4)' },
 };
 
 function FitBadge({ fit }: { fit?: ModelFit }) {
   if (!fit || fit.level === 'unknown') return null;
   const s = FIT_STYLE[fit.level];
   return (
-    <span title={fit.reason} style={{ fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 20, background: s.bg, border: `1px solid ${s.bd}`, color: s.fg, fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
+    <span title={fit.reason} style={{ fontSize: 9, fontWeight: 700, padding: '1px 6px', background: s.bg, border: `1px solid ${s.bd}`, color: s.fg, fontFamily: TYPE_FONT, letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>
       {s.label}
     </span>
   );
@@ -63,7 +67,7 @@ function Row({ label, desc, children }: { label: string; desc?: string; children
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 24, padding: '14px 0', borderBottom: '1px solid var(--bd)' }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <p style={{ fontSize: 14, fontWeight: 500, color: 'var(--fg)', margin: 0 }}>{label}</p>
+        <p style={{ fontSize: 14, fontWeight: 600, color: 'var(--fg)', margin: 0 }}>{label}</p>
         {desc && <p style={{ fontSize: 12, color: 'var(--fg-3)', marginTop: 3, lineHeight: 1.5, marginBottom: 0 }}>{desc}</p>}
       </div>
       <div style={{ flexShrink: 0 }}>{children}</div>
@@ -73,7 +77,7 @@ function Row({ label, desc, children }: { label: string; desc?: string; children
 
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: 10, fontFamily: 'JetBrains Mono, monospace' }}>
+    <p className="kicker" style={{ marginBottom: 10 }}>
       {children}
     </p>
   );
@@ -98,6 +102,10 @@ export default function SettingsPage() {
   const [defaultModel, setDefaultModel] = useState('');
   const [fontSize, setFontSize] = useState<'small' | 'medium' | 'large'>('medium');
   const [density, setDensity] = useState<'compact' | 'comfortable'>('comfortable');
+
+  // Appearance: morning (light) vs. midnight (dark) edition + press accent
+  const [mode, setMode] = useState<'light' | 'dark'>('light');
+  const [accent, setAccent] = useState<string>(DEFAULT_ACCENT);
 
   // Developer: API keys
   const [keys, setKeys] = useState<ApiKey[]>([]);
@@ -183,10 +191,17 @@ export default function SettingsPage() {
 
   useEffect(() => { localStorage.setItem('chakor-density', density); }, [density]);
 
+  // Reflect the edition already applied before paint (app/layout.tsx reads
+  // 'chakor-mode') and the stored accent, so the controls show the truth.
+  useEffect(() => {
+    setMode(document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+    setAccent(loadAccent() ?? DEFAULT_ACCENT);
+  }, []);
+
   if (status === 'loading') {
     return (
       <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, color: 'var(--fg-3)', fontFamily: 'Inter, sans-serif', fontSize: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, color: 'var(--fg-3)', fontFamily: TYPE_FONT, fontSize: 12, letterSpacing: '0.14em', textTransform: 'uppercase' }}>
           <div style={{ width: 16, height: 16, border: '2px solid var(--bd-2)', borderTopColor: 'var(--g)', borderRadius: '50%', animation: 'spin .7s linear infinite' }} />
           Loading…
         </div>
@@ -197,13 +212,26 @@ export default function SettingsPage() {
 
   function notify(msg: string, ok = true) { setToast({ msg, ok }); setTimeout(() => setToast(null), 3500); }
 
+  // Morning / Midnight edition: flip the dark class on <html> and remember it.
+  function setEdition(next: 'light' | 'dark') {
+    setMode(next);
+    document.documentElement.classList.toggle('dark', next === 'dark');
+    try { localStorage.setItem('chakor-mode', next); } catch { /* ignore */ }
+  }
+
+  function pickAccent(hex: string | null) {
+    setAccent(hex ?? DEFAULT_ACCENT);
+    applyAccent(hex);
+    saveAccent(hex);
+  }
+
   async function saveName() {
     if (!displayName.trim()) return;
     setSavingName(true);
     try {
       const r = await fetch('/api/user/profile', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ displayName: displayName.trim() }) });
       const d = await r.json();
-      r.ok ? notify('Display name updated') : notify(d.error, false);
+      if (r.ok) notify('Display name updated'); else notify(d.error, false);
     } catch { notify('Network error', false); }
     finally { setSavingName(false); }
   }
@@ -238,6 +266,7 @@ export default function SettingsPage() {
   }
 
   async function deleteKey(id: number) {
+    if (!window.confirm('Revoke this API key? Apps using it will stop working.')) return;
     try {
       await fetch(`/api/user/keys/${id}`, { method: 'DELETE' });
       setKeys(k => k.filter(x => x.id !== id));
@@ -246,6 +275,7 @@ export default function SettingsPage() {
   }
 
   async function deleteModel(name: string) {
+    if (!window.confirm(`Remove ${name}? This can free several gigabytes of disk, but the model must be re-pulled before you can use it again.`)) return;
     try {
       const r = await fetch('/api/models/installed', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
       if (r.ok) { setInstalled(m => m.filter(x => x.name !== name)); notify('Model removed'); }
@@ -271,9 +301,8 @@ export default function SettingsPage() {
         const parts = buf.split('\n\n');
         buf = parts.pop() ?? '';
         for (const part of parts) {
-          const line = part.trim();
-          if (!line.startsWith('data:')) continue;
-          const data = line.slice(5).trim();
+          const data = part.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trim()).join('\n');
+          if (!data) continue;
           if (data === '[DONE]') break outer;
           try {
             const p = JSON.parse(data) as { status?: string; total?: number; completed?: number; error?: string };
@@ -324,7 +353,7 @@ export default function SettingsPage() {
       const r = await fetch('/api/models/hf/pull', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repo, file }) });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) { notify(d.error ?? 'Could not start download', false); return; }
-      notify('Download started — it keeps running in the background');
+      notify('Download started, it keeps running in the background');
       refreshDownloads();
     } catch { notify('Could not start download', false); }
   }
@@ -414,7 +443,7 @@ export default function SettingsPage() {
           if (s.live.online && okModel && okCtx) { notify('Local model updated'); return; }
         } catch { /* still restarting */ }
       }
-      notify('Server is taking a while to come back — check status above.', false);
+      notify('Server is taking a while to come back, check status above.', false);
     } catch { notify('Network error', false); }
     finally { setSwitching(false); setSwitchMsg(''); loadSystem(); }
   }
@@ -438,37 +467,34 @@ export default function SettingsPage() {
   const baseUrl = (typeof window !== 'undefined' ? window.location.origin : APP.url) + '/v1';
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'Inter, sans-serif' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--fg)' }}>
 
       {/* Toast */}
       {toast && (
         <div className="toast" style={{
           position: 'fixed', top: 20, right: 20, zIndex: 9999,
           display: 'flex', alignItems: 'center', gap: 10,
-          padding: '11px 16px', borderRadius: 'var(--r-md)',
-          background: 'var(--bg-2)', border: `1px solid ${toast.ok ? 'var(--g-bd)' : 'rgba(248,113,113,0.2)'}`,
-          boxShadow: 'var(--sh)', fontSize: 13, color: 'var(--fg)', minWidth: 220,
-          fontFamily: 'Inter, sans-serif',
+          padding: '11px 16px',
+          background: 'var(--bg-1)', border: `1px solid ${toast.ok ? 'var(--g-bd)' : 'var(--err)'}`,
+          boxShadow: 'var(--sh-lg)', fontSize: 13, color: 'var(--fg)', minWidth: 220,
         }}>
-          <span style={{ color: toast.ok ? 'var(--ok)' : 'var(--err)', fontWeight: 600, fontFamily: 'JetBrains Mono, monospace' }}>
+          <span style={{ color: toast.ok ? 'var(--ok)' : 'var(--err)', fontWeight: 600, fontFamily: MONO_FONT }}>
             {toast.ok ? '✓' : '✕'}
           </span>
           {toast.msg}
         </div>
       )}
 
-      {/* Header */}
+      {/* Masthead */}
       <header style={{
         position: 'sticky', top: 0, zIndex: 10,
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
         padding: '0 24px', height: 56,
-        borderBottom: '1px solid var(--bd)',
-        background: 'rgba(9,9,11,0.85)',
-        backdropFilter: 'blur(12px)',
-        WebkitBackdropFilter: 'blur(12px)',
+        borderBottom: '3px double var(--fg)',
+        background: 'var(--bg)',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <Link href="/" style={{ fontSize: 13, color: 'var(--fg-3)', textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6, transition: 'color .15s' }}
+          <Link href="/" className="byline" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6, transition: 'color .15s' }}
             onMouseEnter={e => ((e.currentTarget as HTMLAnchorElement).style.color = 'var(--fg)')}
             onMouseLeave={e => ((e.currentTarget as HTMLAnchorElement).style.color = 'var(--fg-3)')}>
             ← Back
@@ -476,9 +502,7 @@ export default function SettingsPage() {
           <span style={{ width: 1, height: 14, background: 'var(--bd-2)' }} />
           <ChakorWordmark size={22} />
         </div>
-        <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg-3)', fontFamily: 'JetBrains Mono, monospace', letterSpacing: '0.05em' }}>
-          SETTINGS
-        </span>
+        <span className="byline">Settings</span>
       </header>
 
       <div style={{ maxWidth: 660, margin: '0 auto', padding: '36px 24px' }}>
@@ -487,38 +511,39 @@ export default function SettingsPage() {
         <div style={{
           display: 'flex', alignItems: 'center', gap: 14,
           padding: '18px 20px', marginBottom: 28,
-          background: 'var(--bg-1)', border: '1px solid var(--bd)',
-          borderRadius: 'var(--r-lg)',
+          background: 'var(--bg-1)', border: '1px solid var(--bd-2)',
+          boxShadow: 'var(--sh)',
         }}>
           <div style={{
-            width: 44, height: 44, borderRadius: '50%',
+            width: 44, height: 44,
             background: 'var(--g-dim)', border: '1px solid var(--g-bd)',
             color: 'var(--g-text)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontWeight: 700, fontSize: 16, flexShrink: 0, fontFamily: 'JetBrains Mono, monospace',
+            fontWeight: 700, fontSize: 18, flexShrink: 0, fontFamily: TYPE_FONT,
           }}>
             {initials}
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <p style={{ fontWeight: 600, fontSize: 15, color: 'var(--fg)', margin: 0 }}>{session?.user?.name ?? 'User'}</p>
+            <p className="headline" style={{ fontSize: 17, margin: 0 }}>{session?.user?.name ?? 'User'}</p>
             <p style={{ fontSize: 12, color: 'var(--fg-4)', marginTop: 3, margin: 0 }}>{session?.user?.email ?? 'No email set'}</p>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', borderRadius: 'var(--r-xl)', background: 'var(--g-dim)', border: '1px solid var(--g-bd)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 10px', background: 'var(--g-dim)', border: '1px solid var(--g-bd)' }}>
             <div className="status-dot" style={{ width: 5, height: 5 }} />
-            <span style={{ fontSize: 11, color: 'var(--g-text)', fontFamily: 'JetBrains Mono, monospace', fontWeight: 500 }}>online</span>
+            <span style={{ fontSize: 11, color: 'var(--g-text)', fontFamily: TYPE_FONT, letterSpacing: '0.1em', textTransform: 'uppercase' }}>online</span>
           </div>
         </div>
 
         {/* Tab bar */}
-        <div style={{ display: 'flex', gap: 2, marginBottom: 28, padding: 4, background: 'var(--bg-2)', borderRadius: 'var(--r-md)', border: '1px solid var(--bd)' }}>
-          {TABS.map(t => (
+        <div style={{ display: 'flex', flexWrap: 'wrap', marginBottom: 28, background: 'var(--bg-1)', border: '1px solid var(--bd-2)' }}>
+          {TABS.map((t, i) => (
             <button key={t.id} onClick={() => setTab(t.id)} style={{
-              flex: 1, padding: '8px 12px', borderRadius: 'var(--r)',
-              fontSize: 13, fontWeight: tab === t.id ? 600 : 400,
-              border: 'none', cursor: 'pointer', fontFamily: 'Inter, sans-serif',
+              flex: 1, padding: '9px 6px',
+              fontSize: 11.5, letterSpacing: '0.1em', textTransform: 'uppercase',
+              border: 'none', borderLeft: i === 0 ? 'none' : '1px solid var(--bd)',
+              cursor: 'pointer', fontFamily: TYPE_FONT,
               transition: 'all .15s',
-              background: tab === t.id ? 'var(--bg-3)' : 'transparent',
+              background: tab === t.id ? 'var(--bg)' : 'transparent',
               color: tab === t.id ? 'var(--fg)' : 'var(--fg-3)',
-              boxShadow: tab === t.id ? '0 1px 4px rgba(0,0,0,0.3)' : 'none',
+              boxShadow: tab === t.id ? 'inset 0 -2px 0 var(--g)' : 'none',
             }}>
               {t.label}
             </button>
@@ -552,8 +577,8 @@ export default function SettingsPage() {
                     style={{ paddingRight: 60 }} />
                   <button type="button" onClick={() => setShowPw(v => !v)} style={{
                     position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
-                    fontSize: 11, fontWeight: 600, color: 'var(--fg-4)', background: 'none', border: 'none',
-                    cursor: 'pointer', letterSpacing: '0.04em',
+                    fontSize: 11, color: 'var(--fg-4)', background: 'none', border: 'none',
+                    cursor: 'pointer', letterSpacing: '0.08em', fontFamily: TYPE_FONT, textTransform: 'uppercase',
                   }}>{showPw ? 'HIDE' : 'SHOW'}</button>
                 </div>
                 <input type={showPw ? 'text' : 'password'} value={newPw}
@@ -562,7 +587,7 @@ export default function SettingsPage() {
                 <input type={showPw ? 'text' : 'password'} value={confirmPw}
                   onChange={e => setConfirmPw(e.target.value)}
                   placeholder="Confirm new password" className="inp"
-                  style={{ borderColor: confirmPw.length > 0 ? (confirmPw === newPw ? 'rgba(74,222,128,0.4)' : 'rgba(248,113,113,0.4)') : undefined }}
+                  style={{ borderColor: confirmPw.length > 0 ? (confirmPw === newPw ? 'var(--ok)' : 'var(--err)') : undefined }}
                   onKeyDown={e => e.key === 'Enter' && changePw()} />
                 {confirmPw.length > 0 && (
                   <p style={{ fontSize: 12, color: confirmPw === newPw ? 'var(--ok)' : 'var(--err)', margin: 0 }}>
@@ -591,19 +616,19 @@ export default function SettingsPage() {
                       <button key={m.id} onClick={() => { setDefaultModel(m.id); localStorage.setItem('chakor-selected-model', m.id); }}
                         style={{
                           display: 'flex', alignItems: 'center', gap: 12, padding: '12px 14px',
-                          borderRadius: 'var(--r-md)', textAlign: 'left',
+                          textAlign: 'left',
                           border: `1px solid ${active ? 'var(--g-bd)' : 'var(--bd)'}`,
                           background: active ? 'var(--g-dim)' : 'var(--bg-1)',
-                          cursor: 'pointer', fontFamily: 'Inter, sans-serif', transition: 'all .15s',
+                          cursor: 'pointer', transition: 'all .15s',
                         }}>
-                        <div style={{ width: 8, height: 8, borderRadius: '50%', background: active ? 'var(--g)' : 'var(--fg-4)', flexShrink: 0, transition: 'background .15s' }} />
+                        <div style={{ width: 8, height: 8, background: active ? 'var(--g)' : 'var(--fg-4)', flexShrink: 0, transition: 'background .15s' }} />
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', margin: 0 }}>{m.name}</p>
-                          <p style={{ fontSize: 11, color: 'var(--fg-3)', margin: 0, marginTop: 2, fontFamily: 'JetBrains Mono, monospace' }}>
+                          <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', margin: 0 }}>{m.name}</p>
+                          <p style={{ fontSize: 11, color: 'var(--fg-3)', margin: 0, marginTop: 2, fontFamily: TYPE_FONT, letterSpacing: '0.04em', textTransform: 'uppercase' }}>
                             {m.provider} · {(m.contextWindow / 1000).toFixed(0)}K ctx
                           </p>
                         </div>
-                        {active && <span style={{ fontSize: 11, color: 'var(--g-text)', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600 }}>ACTIVE</span>}
+                        {active && <span style={{ fontSize: 11, color: 'var(--g-text)', fontFamily: TYPE_FONT, letterSpacing: '0.1em' }}>ACTIVE</span>}
                       </button>
                     );
                   })}
@@ -612,7 +637,7 @@ export default function SettingsPage() {
             )}
 
             <SectionLabel>Chat</SectionLabel>
-            <div style={{ border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', padding: '0 16px', background: 'var(--bg-1)' }}>
+            <div style={{ border: '1px solid var(--bd-2)', padding: '0 16px', background: 'var(--bg-1)' }}>
               <Row label="Auto-read responses" desc="Speak each AI response with text-to-speech when complete">
                 <Toggle on={autoRead} onChange={v => { setAutoRead(v); localStorage.setItem('chakor-auto-read', String(v)); }} />
               </Row>
@@ -631,9 +656,9 @@ export default function SettingsPage() {
               Use {APP.name} as a drop-in OpenAI backend. Point any OpenAI client at the base URL below with one of your keys, and it talks to whatever model you name, local or cloud.
             </p>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'var(--bg-1)', border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', marginBottom: 24 }}>
-              <span style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: 'JetBrains Mono, monospace', flexShrink: 0, letterSpacing: '0.06em' }}>BASE URL</span>
-              <code style={{ flex: 1, fontSize: 13, color: 'var(--fg)', fontFamily: 'JetBrains Mono, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{baseUrl}</code>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', background: 'var(--bg-1)', border: '1px solid var(--bd-2)', marginBottom: 24 }}>
+              <span style={{ fontSize: 10, color: 'var(--fg-4)', fontFamily: TYPE_FONT, flexShrink: 0, letterSpacing: '0.1em', textTransform: 'uppercase' }}>BASE URL</span>
+              <code style={{ flex: 1, fontSize: 13, color: 'var(--fg)', fontFamily: MONO_FONT, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{baseUrl}</code>
               <button onClick={() => navigator.clipboard.writeText(baseUrl).then(() => notify('Base URL copied')).catch(() => {})} className="btn-ghost-sm" style={{ fontSize: 12, padding: '4px 8px', flexShrink: 0 }}>Copy</button>
             </div>
 
@@ -644,10 +669,10 @@ export default function SettingsPage() {
             </div>
 
             {freshKey && (
-              <div style={{ padding: '14px 16px', marginBottom: 18, background: 'var(--g-dim)', border: '1px solid var(--g-bd)', borderRadius: 'var(--r-md)' }}>
+              <div style={{ padding: '14px 16px', marginBottom: 18, background: 'var(--g-dim)', border: '1px solid var(--g-bd)' }}>
                 <p style={{ fontSize: 12, color: 'var(--g-text)', fontWeight: 600, margin: '0 0 8px' }}>Copy this key now. You will not be able to see it again.</p>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <code style={{ flex: 1, fontSize: 12.5, color: 'var(--fg)', fontFamily: 'JetBrains Mono, monospace', wordBreak: 'break-all' }}>{freshKey}</code>
+                  <code style={{ flex: 1, fontSize: 12.5, color: 'var(--fg)', fontFamily: MONO_FONT, wordBreak: 'break-all' }}>{freshKey}</code>
                   <button onClick={() => navigator.clipboard.writeText(freshKey).then(() => setCopiedFresh(true)).catch(() => {})} className="btn btn-outline" style={{ fontSize: 12, padding: '6px 12px', flexShrink: 0 }}>{copiedFresh ? 'Copied' : 'Copy'}</button>
                   <button onClick={() => setFreshKey(null)} className="btn-ghost-sm" style={{ padding: '6px 8px', flexShrink: 0 }}>Done</button>
                 </div>
@@ -657,12 +682,12 @@ export default function SettingsPage() {
             {keys.length > 0 && (
               <div style={{ marginBottom: 24 }}>
                 <SectionLabel>Your keys</SectionLabel>
-                <div style={{ border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+                <div style={{ border: '1px solid var(--bd-2)', overflow: 'hidden' }}>
                   {keys.map(k => (
                     <div key={k.id} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: '1px solid var(--bd)', background: 'var(--bg-1)' }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', margin: 0 }}>{k.name}</p>
-                        <p style={{ fontSize: 11, color: 'var(--fg-4)', margin: '2px 0 0', fontFamily: 'JetBrains Mono, monospace' }}>
+                        <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', margin: 0 }}>{k.name}</p>
+                        <p style={{ fontSize: 11, color: 'var(--fg-4)', margin: '2px 0 0', fontFamily: TYPE_FONT, letterSpacing: '0.04em' }}>
                           {k.masked} · {k.last_used ? `used ${new Date(k.last_used * 1000).toLocaleDateString()}` : 'never used'}
                         </p>
                       </div>
@@ -674,7 +699,7 @@ export default function SettingsPage() {
             )}
 
             <SectionLabel>Example</SectionLabel>
-            <pre style={{ fontSize: 12, color: 'var(--fg-2)', background: 'var(--bg-1)', border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', padding: '14px 16px', overflowX: 'auto', fontFamily: 'JetBrains Mono, monospace', lineHeight: 1.6, margin: 0 }}>
+            <pre className="codeblock" style={{ fontSize: 12, color: '#e9dfc8', padding: '14px 16px', overflowX: 'auto', fontFamily: MONO_FONT, lineHeight: 1.6, margin: 0 }}>
 {`curl ${baseUrl}/chat/completions \\
   -H "Authorization: Bearer YOUR_KEY" \\
   -H "Content-Type: application/json" \\
@@ -686,11 +711,11 @@ export default function SettingsPage() {
         {/* Models tab (admin) */}
         {tab === 'models' && (
           <div className="anim-fade-in">
-            {/* Detected hardware — so a user knows up front what their machine can run */}
+            {/* Detected hardware, so a user knows up front what their machine can run */}
             <SectionLabel>Your hardware</SectionLabel>
-            <div style={{ padding: '14px 16px', background: 'var(--bg-1)', border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', marginBottom: 22 }}>
+            <div style={{ padding: '14px 16px', background: 'var(--bg-1)', border: '1px solid var(--bd-2)', marginBottom: 22 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, marginBottom: system ? 13 : 0 }}>
-                <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', margin: 0 }}>{system ? system.hardwareSummary : 'Detecting…'}</p>
+                <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', margin: 0 }}>{system ? system.hardwareSummary : 'Detecting…'}</p>
                 <button onClick={() => loadSystem(true)} disabled={rescanning} className="btn-ghost-sm" style={{ fontSize: 12, flexShrink: 0, opacity: rescanning ? 0.5 : 1 }}>{rescanning ? 'Scanning…' : 'Rescan'}</button>
               </div>
               {system && (
@@ -702,8 +727,8 @@ export default function SettingsPage() {
                       ? `${system.hardware.gpuName}${system.hardware.gpuVramGb ? ` · ${system.hardware.gpuVramGb} GB` : ''}${system.hardware.unifiedMemory ? ' (shared)' : ''}`
                       : system.hardware.gpuError ? 'GPU driver error' : 'CPU only'],
                   ] as [string, string][]).map(([k, v]) => (
-                    <div key={k} style={{ background: 'var(--bg-2)', border: '1px solid var(--bd)', borderRadius: 'var(--r)', padding: '8px 11px', minWidth: 0 }}>
-                      <p style={{ fontSize: 10, color: 'var(--fg-4)', margin: '0 0 3px', textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: 'JetBrains Mono, monospace' }}>{k}</p>
+                    <div key={k} style={{ background: 'var(--bg-2)', border: '1px solid var(--bd)', padding: '8px 11px', minWidth: 0 }}>
+                      <p style={{ fontSize: 10, color: 'var(--fg-4)', margin: '0 0 3px', textTransform: 'uppercase', letterSpacing: '0.1em', fontFamily: TYPE_FONT }}>{k}</p>
                       <p style={{ fontSize: 12, color: 'var(--fg-2)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={v}>{v}</p>
                     </div>
                   ))}
@@ -711,18 +736,18 @@ export default function SettingsPage() {
               )}
             </div>
 
-            {/* AI engines — which local backends are up right now */}
+            {/* AI engines, which local backends are up right now */}
             <SectionLabel>AI engines</SectionLabel>
-            <p style={{ fontSize: 12.5, color: 'var(--fg-3)', margin: '0 0 10px', lineHeight: 1.55 }}>Chakor can run models through any of these. If one is down (or a model crashed it), switch to another from the model menu in chat — no terminal needed.</p>
-            <div style={{ border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', overflow: 'hidden', marginBottom: 28 }}>
+            <p style={{ fontSize: 12.5, color: 'var(--fg-3)', margin: '0 0 10px', lineHeight: 1.55 }}>Chakor can run models through any of these. If one is down (or a model crashed it), switch to another from the model menu in chat, no terminal needed.</p>
+            <div style={{ border: '1px solid var(--bd-2)', overflow: 'hidden', marginBottom: 28 }}>
               {(system?.engines ?? []).map(e => (
                 <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 11, padding: '12px 16px', borderBottom: '1px solid var(--bd)', background: 'var(--bg-1)' }}>
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: e.running ? 'var(--g)' : 'var(--bd-2)', boxShadow: e.running ? '0 0 6px rgba(34,197,94,.5)' : 'none' }} />
+                  <div style={{ width: 8, height: 8, flexShrink: 0, background: e.running ? 'var(--g)' : 'var(--bd-3)' }} />
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', margin: 0 }}>{e.label}{e.managed ? <span style={{ fontSize: 10, color: 'var(--fg-4)', fontWeight: 400 }}> · managed by Chakor</span> : ''}</p>
-                    <p style={{ fontSize: 11, color: 'var(--fg-4)', margin: '2px 0 0', fontFamily: 'JetBrains Mono, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={e.baseUrl}>{e.detail} · {e.baseUrl}</p>
+                    <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', margin: 0 }}>{e.label}{e.managed ? <span style={{ fontSize: 10, color: 'var(--fg-4)', fontWeight: 400 }}> · managed by Chakor</span> : ''}</p>
+                    <p style={{ fontSize: 11, color: 'var(--fg-4)', margin: '2px 0 0', fontFamily: TYPE_FONT, letterSpacing: '0.04em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={e.baseUrl}>{e.detail} · {e.baseUrl}</p>
                   </div>
-                  <span style={{ fontSize: 10, fontWeight: 600, padding: '2px 8px', borderRadius: 20, flexShrink: 0, fontFamily: 'JetBrains Mono, monospace', background: e.running ? 'var(--g-dim)' : 'var(--bg-3)', color: e.running ? 'var(--g-text)' : 'var(--fg-4)', border: `1px solid ${e.running ? 'var(--g-bd)' : 'var(--bd-2)'}` }}>
+                  <span style={{ fontSize: 10, padding: '2px 8px', flexShrink: 0, fontFamily: TYPE_FONT, letterSpacing: '0.08em', textTransform: 'uppercase', background: e.running ? 'var(--g-dim)' : 'var(--bg-3)', color: e.running ? 'var(--g-text)' : 'var(--fg-4)', border: `1px solid ${e.running ? 'var(--g-bd)' : 'var(--bd-2)'}` }}>
                     {e.running ? (e.modelCount ? `${e.modelCount} model${e.modelCount === 1 ? '' : 's'}` : 'ready') : 'offline'}
                   </span>
                 </div>
@@ -730,10 +755,10 @@ export default function SettingsPage() {
               {!system && <p style={{ fontSize: 13, color: 'var(--fg-4)', padding: '14px 16px', margin: 0 }}>Checking engines…</p>}
             </div>
 
-            {/* One model at a time vs. several loaded — memory safety for modest rigs */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 20, padding: '14px 16px', background: 'var(--bg-1)', border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', marginBottom: 28 }}>
+            {/* One model at a time vs. several loaded, memory safety for modest rigs */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 20, padding: '14px 16px', background: 'var(--bg-1)', border: '1px solid var(--bd-2)', marginBottom: 28 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
-                <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', margin: 0 }}>Keep multiple models loaded</p>
+                <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', margin: 0 }}>Keep multiple models loaded</p>
                 <p style={{ fontSize: 11.5, color: 'var(--fg-4)', margin: '3px 0 0', lineHeight: 1.5 }}>
                   {canMultiModel
                     ? 'Off (recommended): switching engines unloads the previous model first, so two models never fight for memory. On: keep several in memory at once for instant switching.'
@@ -743,15 +768,15 @@ export default function SettingsPage() {
               <Toggle on={multiModel} onChange={canMultiModel ? saveMultiModel : () => notify('Your hardware can only hold one model at a time', false)} />
             </div>
 
-            {/* Local model (llama.cpp) — switch the running model + context size */}
+            {/* Local model (llama.cpp), switch the running model + context size */}
             <SectionLabel>Local model</SectionLabel>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', background: 'var(--bg-1)', border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', marginBottom: 12 }}>
-              <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: local?.live.online ? 'var(--g)' : 'var(--err)', boxShadow: local?.live.online ? '0 0 6px rgba(34,197,94,.5)' : 'none' }} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', background: 'var(--bg-1)', border: '1px solid var(--bd-2)', marginBottom: 12 }}>
+              <div style={{ width: 8, height: 8, flexShrink: 0, background: local?.live.online ? 'var(--g)' : 'var(--err)' }} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                   {local ? (local.live.online ? (local.live.modelName ?? 'Running') : 'Offline') : 'Checking…'}
                 </p>
-                <p style={{ fontSize: 11, color: 'var(--fg-4)', margin: '2px 0 0', fontFamily: 'JetBrains Mono, monospace' }}>
+                <p style={{ fontSize: 11, color: 'var(--fg-4)', margin: '2px 0 0', fontFamily: TYPE_FONT, letterSpacing: '0.04em' }}>
                   llama.cpp{local?.live.nCtx ? ` · ${fmtCtx(local.live.nCtx)} context` : ''}{local?.live.vision ? ' · vision' : ''}
                 </p>
               </div>
@@ -759,49 +784,49 @@ export default function SettingsPage() {
             </div>
 
             {local && local.mode === 'external' && (
-              <div style={{ padding: '12px 14px', background: 'rgba(251,191,36,.07)', border: '1px solid rgba(251,191,36,.2)', borderRadius: 'var(--r-md)', marginBottom: 14 }}>
+              <div style={{ padding: '12px 14px', background: 'var(--bg-1)', border: '1px solid var(--warn)', borderLeft: '3px solid var(--warn)', marginBottom: 14 }}>
                 <p style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: '0 0 8px', lineHeight: 1.55 }}>The model is running as a separate service, so Chakor can&apos;t switch it live yet. Fold it into one service (run once, then it just works):</p>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <code style={{ flex: 1, fontSize: 12, color: 'var(--g-text)', fontFamily: 'JetBrains Mono, monospace', background: 'var(--bg-2)', padding: '8px 10px', borderRadius: 6, overflowX: 'auto', whiteSpace: 'nowrap' }}>sudo bash scripts/use-single-service.sh</code>
+                  <code style={{ flex: 1, fontSize: 12, color: 'var(--g-text)', fontFamily: MONO_FONT, background: 'var(--bg-2)', padding: '8px 10px', overflowX: 'auto', whiteSpace: 'nowrap' }}>sudo bash scripts/use-single-service.sh</code>
                   <button onClick={() => navigator.clipboard.writeText('sudo bash scripts/use-single-service.sh').then(() => notify('Command copied')).catch(() => {})} className="btn-ghost-sm" style={{ fontSize: 12, flexShrink: 0 }}>Copy</button>
                 </div>
               </div>
             )}
             {local && local.mode === 'off' && (
-              <div style={{ padding: '12px 14px', background: 'var(--bg-1)', border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', marginBottom: 14 }}>
-                <p style={{ fontSize: 12.5, color: 'var(--fg-3)', margin: 0, lineHeight: 1.55 }}>Local model supervision is off (<code style={{ fontFamily: 'JetBrains Mono, monospace' }}>CHAKOR_SUPERVISE_LLAMA=false</code>). Chakor is using an external server, Ollama, or cloud models.</p>
+              <div style={{ padding: '12px 14px', background: 'var(--bg-1)', border: '1px solid var(--bd-2)', marginBottom: 14 }}>
+                <p style={{ fontSize: 12.5, color: 'var(--fg-3)', margin: 0, lineHeight: 1.55 }}>Local model supervision is off (<code style={{ fontFamily: MONO_FONT }}>CHAKOR_SUPERVISE_LLAMA=false</code>). Chakor is using an external server, Ollama, or cloud models.</p>
               </div>
             )}
             {local && local.mode === 'down' && local.supervisor?.lastError && (
-              <div style={{ padding: '12px 14px', background: 'rgba(248,113,113,.07)', border: '1px solid rgba(248,113,113,.2)', borderRadius: 'var(--r-md)', marginBottom: 14 }}>
-                <p style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: 0, lineHeight: 1.55 }}>Local model isn&apos;t running: <span style={{ fontFamily: 'JetBrains Mono, monospace', color: 'var(--err)' }}>{local.supervisor.lastError}</span></p>
+              <div style={{ padding: '12px 14px', background: 'var(--bg-1)', border: '1px solid var(--err)', borderLeft: '3px solid var(--err)', marginBottom: 14 }}>
+                <p style={{ fontSize: 12.5, color: 'var(--fg-2)', margin: 0, lineHeight: 1.55 }}>Local model isn&apos;t running: <span style={{ fontFamily: MONO_FONT, color: 'var(--err)' }}>{local.supervisor.lastError}</span></p>
               </div>
             )}
 
-            <p style={{ fontSize: 12.5, color: 'var(--fg-3)', margin: '0 0 8px', lineHeight: 1.5 }}>Context length — how much the model remembers at once. Bigger uses more memory and runs a little slower. <strong style={{ color: 'var(--fg-2)' }}>Max</strong> uses everything your hardware can spare.</p>
+            <p style={{ fontSize: 12.5, color: 'var(--fg-3)', margin: '0 0 8px', lineHeight: 1.5 }}>Context length: how much the model remembers at once. Bigger uses more memory and runs a little slower. <strong style={{ color: 'var(--fg-2)' }}>Max</strong> uses everything your hardware can spare.</p>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 22 }}>
               {CTX_PRESETS.map(c => {
                 const active = local?.live.nCtx === c;
                 return (
                   <button key={c} disabled={switching || !local} onClick={() => switchLocal({ ctx: c })}
-                    style={{ padding: '8px 16px', borderRadius: 'var(--r)', fontSize: 13, fontFamily: 'JetBrains Mono, monospace', cursor: switching ? 'default' : 'pointer', border: `1px solid ${active ? 'var(--g-bd)' : 'var(--bd)'}`, background: active ? 'var(--g-dim)' : 'var(--bg-1)', color: active ? 'var(--g-text)' : 'var(--fg-2)', opacity: switching ? 0.5 : 1, transition: 'all .15s' }}>
+                    style={{ padding: '8px 16px', fontSize: 13, fontFamily: MONO_FONT, cursor: switching ? 'default' : 'pointer', border: `1px solid ${active ? 'var(--g-bd)' : 'var(--bd)'}`, background: active ? 'var(--g-dim)' : 'var(--bg-1)', color: active ? 'var(--g-text)' : 'var(--fg-2)', opacity: switching ? 0.5 : 1, transition: 'all .15s' }}>
                     {fmtCtx(c)}
                   </button>
                 );
               })}
               {runningMaxCtx > 0 && (
                 <button disabled={switching || !local} onClick={() => switchLocal({ ctx: runningMaxCtx })} title={`Maximum your hardware can back: ${fmtCtx(runningMaxCtx)} tokens`}
-                  style={{ padding: '8px 16px', borderRadius: 'var(--r)', fontSize: 13, fontFamily: 'JetBrains Mono, monospace', cursor: switching ? 'default' : 'pointer', border: `1px solid ${local?.live.nCtx === runningMaxCtx ? 'var(--g-bd)' : 'var(--bd)'}`, background: local?.live.nCtx === runningMaxCtx ? 'var(--g-dim)' : 'var(--bg-1)', color: local?.live.nCtx === runningMaxCtx ? 'var(--g-text)' : 'var(--fg-2)', opacity: switching ? 0.5 : 1, transition: 'all .15s' }}>
+                  style={{ padding: '8px 16px', fontSize: 13, fontFamily: MONO_FONT, cursor: switching ? 'default' : 'pointer', border: `1px solid ${local?.live.nCtx === runningMaxCtx ? 'var(--g-bd)' : 'var(--bd)'}`, background: local?.live.nCtx === runningMaxCtx ? 'var(--g-dim)' : 'var(--bg-1)', color: local?.live.nCtx === runningMaxCtx ? 'var(--g-text)' : 'var(--fg-2)', opacity: switching ? 0.5 : 1, transition: 'all .15s' }}>
                   Max · {fmtCtx(runningMaxCtx)}
                 </button>
               )}
             </div>
 
-            <p style={{ fontSize: 12.5, color: 'var(--fg-3)', margin: '0 0 8px', lineHeight: 1.5 }}>Installed model files — click <strong style={{ color: 'var(--fg-2)' }}>Use</strong> to switch the running model.</p>
+            <p style={{ fontSize: 12.5, color: 'var(--fg-3)', margin: '0 0 8px', lineHeight: 1.5 }}>Installed model files: click <strong style={{ color: 'var(--fg-2)' }}>Use</strong> to switch the running model.</p>
             {!local?.available || local.available.length === 0 ? (
-              <p style={{ fontSize: 13, color: 'var(--fg-4)', padding: '8px 0' }}>No .gguf files found. Put models in <code style={{ fontFamily: 'JetBrains Mono, monospace' }}>~/Downloads</code> or set <code style={{ fontFamily: 'JetBrains Mono, monospace' }}>CHAKOR_MODELS_DIR</code>.</p>
+              <p style={{ fontSize: 13, color: 'var(--fg-4)', padding: '8px 0' }}>No .gguf files found. Put models in <code style={{ fontFamily: MONO_FONT }}>~/Downloads</code> or set <code style={{ fontFamily: MONO_FONT }}>CHAKOR_MODELS_DIR</code>.</p>
             ) : (
-              <div style={{ border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+              <div style={{ border: '1px solid var(--bd-2)', overflow: 'hidden' }}>
                 {local.available.map(m => {
                   const current = (local.live.modelPath ?? '') === m.path || local.live.modelName === m.name;
                   const fit = fitFor(m.path);
@@ -809,18 +834,18 @@ export default function SettingsPage() {
                   return (
                     <div key={m.path} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: '1px solid var(--bd)', background: current ? 'var(--g-dim)' : 'var(--bg-1)' }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
                           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{m.name}</span>
                           <FitBadge fit={fit} />
-                          {isRec && <span title="Best fit for your hardware" style={{ fontSize: 9, fontWeight: 700, padding: '1px 6px', borderRadius: 20, background: 'var(--g-dim)', border: '1px solid var(--g-bd)', color: 'var(--g-text)', fontFamily: 'JetBrains Mono, monospace', whiteSpace: 'nowrap' }}>RECOMMENDED</span>}
-                          {m.vision && <span style={{ fontSize: 9, padding: '1px 6px', borderRadius: 20, background: 'var(--bg-3)', color: 'var(--fg-3)', fontFamily: 'JetBrains Mono, monospace' }}>VISION</span>}
+                          {isRec && <span title="Best fit for your hardware" style={{ fontSize: 9, fontWeight: 700, padding: '1px 6px', background: 'var(--g-dim)', border: '1px solid var(--g-bd)', color: 'var(--g-text)', fontFamily: TYPE_FONT, letterSpacing: '0.06em', whiteSpace: 'nowrap' }}>RECOMMENDED</span>}
+                          {m.vision && <span style={{ fontSize: 9, padding: '1px 6px', background: 'var(--bg-3)', color: 'var(--fg-3)', fontFamily: TYPE_FONT, letterSpacing: '0.06em' }}>VISION</span>}
                         </p>
-                        <p style={{ fontSize: 11, color: fit?.level === 'too_big' ? 'var(--err)' : 'var(--fg-4)', margin: '2px 0 0', fontFamily: 'JetBrains Mono, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <p style={{ fontSize: 11, color: fit?.level === 'too_big' ? 'var(--err)' : 'var(--fg-4)', margin: '2px 0 0', fontFamily: TYPE_FONT, letterSpacing: '0.04em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {fmtSize(m.size)}{fit && fit.level !== 'unknown' ? ` · ${fit.reason}` : ''}
                         </p>
                       </div>
                       {current
-                        ? <span style={{ fontSize: 11, color: 'var(--g-text)', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, flexShrink: 0 }}>RUNNING</span>
+                        ? <span style={{ fontSize: 11, color: 'var(--g-text)', fontFamily: TYPE_FONT, letterSpacing: '0.1em', flexShrink: 0 }}>RUNNING</span>
                         : <button disabled={switching} onClick={() => switchLocal({ model: m.path })} className="btn btn-outline" style={{ fontSize: 12, padding: '6px 14px', flexShrink: 0, opacity: switching ? 0.5 : 1 }} title={fit?.level === 'too_big' ? 'This model is likely too big for your machine and may crash' : undefined}>Use</button>}
                     </div>
                   );
@@ -834,9 +859,9 @@ export default function SettingsPage() {
               </p>
             )}
 
-            <div style={{ height: 1, background: 'var(--bd)', margin: '30px 0' }} />
+            <hr className="rule-double" style={{ margin: '30px 0' }} />
 
-            {/* Hugging Face downloader — get a GGUF for llama.cpp with no terminal */}
+            {/* Hugging Face downloader, get a GGUF for llama.cpp with no terminal */}
             <SectionLabel>Download from Hugging Face</SectionLabel>
             <p style={{ fontSize: 13, color: 'var(--fg-3)', lineHeight: 1.6, margin: '0 0 6px' }}>
               Search Hugging Face for a GGUF model and download it straight into your models folder. It then appears under <strong style={{ color: 'var(--fg-2)' }}>Local model</strong> above, ready to run with llama.cpp. Each file is tagged for how well it fits your hardware, so you don&apos;t grab one that won&apos;t run.
@@ -854,15 +879,15 @@ export default function SettingsPage() {
             )}
 
             {hfRepos.length > 0 && (
-              <div style={{ border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', overflow: 'hidden', marginBottom: 8 }}>
+              <div style={{ border: '1px solid var(--bd-2)', overflow: 'hidden', marginBottom: 8 }}>
                 {hfRepos.map(repo => {
                   const open = hfOpenRepo === repo.id;
                   return (
                     <div key={repo.id} style={{ borderBottom: '1px solid var(--bd)' }}>
                       <button onClick={() => hfOpenFiles(repo.id)} style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '12px 16px', background: open ? 'var(--bg-2)' : 'var(--bg-1)', border: 'none', cursor: 'pointer', textAlign: 'left' }}>
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{repo.id}</p>
-                          <p style={{ fontSize: 11, color: 'var(--fg-4)', margin: '2px 0 0', fontFamily: 'JetBrains Mono, monospace' }}>↓ {hfNum(repo.downloads)} downloads · ♥ {hfNum(repo.likes)}</p>
+                          <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{repo.id}</p>
+                          <p style={{ fontSize: 11, color: 'var(--fg-4)', margin: '2px 0 0', fontFamily: TYPE_FONT, letterSpacing: '0.04em' }}>↓ {hfNum(repo.downloads)} downloads · ♥ {hfNum(repo.likes)}</p>
                         </div>
                         <span style={{ transform: open ? 'rotate(180deg)' : 'none', transition: 'transform .15s', color: 'var(--fg-4)', flexShrink: 0, fontSize: 11 }}>▾</span>
                       </button>
@@ -882,10 +907,10 @@ export default function SettingsPage() {
                                       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{f.label}</span>
                                       <FitBadge fit={f.fit} />
                                     </p>
-                                    <p style={{ fontSize: 11, color: f.fit?.level === 'too_big' ? 'var(--err)' : 'var(--fg-4)', margin: '2px 0 0', fontFamily: 'JetBrains Mono, monospace' }}>{fmtSize(f.size)}{f.quant ? ` · ${f.quant}` : ''}{f.parts && f.parts.length > 1 ? ` · ${f.parts.length} parts` : ''}{f.fit && f.fit.level !== 'unknown' ? ` · ${f.fit.reason}` : ''}</p>
+                                    <p style={{ fontSize: 11, color: f.fit?.level === 'too_big' ? 'var(--err)' : 'var(--fg-4)', margin: '2px 0 0', fontFamily: TYPE_FONT, letterSpacing: '0.04em' }}>{fmtSize(f.size)}{f.quant ? ` · ${f.quant}` : ''}{f.parts && f.parts.length > 1 ? ` · ${f.parts.length} parts` : ''}{f.fit && f.fit.level !== 'unknown' ? ` · ${f.fit.reason}` : ''}</p>
                                   </div>
                                   {active
-                                    ? <span style={{ fontSize: 11, color: 'var(--g-text)', fontFamily: 'JetBrains Mono, monospace', fontWeight: 600, flexShrink: 0 }}>{active.pct}%</span>
+                                    ? <span style={{ fontSize: 11, color: 'var(--g-text)', fontFamily: TYPE_FONT, letterSpacing: '0.06em', flexShrink: 0 }}>{active.pct}%</span>
                                     : <button onClick={() => hfDownload(repo.id, f.path)} className="btn btn-outline" style={{ fontSize: 12, padding: '6px 14px', flexShrink: 0 }} title={f.fit?.level === 'too_big' ? 'Likely too big for your machine' : undefined}>Download</button>}
                                 </div>
                               </div>
@@ -903,7 +928,7 @@ export default function SettingsPage() {
               <div style={{ marginTop: 18 }}>
                 <SectionLabel>Downloads</SectionLabel>
                 <p style={{ fontSize: 12, color: 'var(--fg-4)', margin: '0 0 10px', lineHeight: 1.5 }}>These run on the server, so they keep going if you close this page or the app.</p>
-                <div style={{ border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+                <div style={{ border: '1px solid var(--bd-2)', overflow: 'hidden' }}>
                   {downloads.map(d => {
                     const active = d.status === 'downloading';
                     const eta = d.etaSec != null && d.etaSec > 0 ? (d.etaSec >= 60 ? `${Math.floor(d.etaSec / 60)}m ${d.etaSec % 60}s` : `${d.etaSec}s`) : '';
@@ -913,7 +938,7 @@ export default function SettingsPage() {
                         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                           <div style={{ flex: 1, minWidth: 0 }}>
                             <p style={{ fontSize: 12.5, color: 'var(--fg)', margin: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.name}</p>
-                            <p style={{ fontSize: 11, color: statusColor, margin: '2px 0 0', fontFamily: 'JetBrains Mono, monospace' }}>
+                            <p style={{ fontSize: 11, color: statusColor, margin: '2px 0 0', fontFamily: TYPE_FONT, letterSpacing: '0.04em' }}>
                               {active
                                 ? `${fmtSize(d.downloaded)} / ${fmtSize(d.total)}${d.speedBps > 0 ? ` · ${fmtSize(d.speedBps)}/s` : ''}${eta ? ` · ${eta} left` : ''}`
                                 : d.status === 'done' ? `Done · ${fmtSize(d.total)}` : d.status === 'error' ? (d.error ?? 'Failed') : 'Cancelled'}
@@ -922,7 +947,7 @@ export default function SettingsPage() {
                           <button onClick={() => hfCancelJob(d.id)} className="btn-ghost-sm" style={{ fontSize: 12, padding: '5px 10px', color: active ? 'var(--err)' : 'var(--fg-4)', flexShrink: 0 }}>{active ? 'Cancel' : 'Dismiss'}</button>
                         </div>
                         {active && (
-                          <div style={{ height: 5, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden', marginTop: 9 }}>
+                          <div style={{ height: 5, background: 'var(--bg-3)', overflow: 'hidden', marginTop: 9 }}>
                             <div style={{ height: '100%', width: `${d.pct}%`, background: 'var(--g)', transition: 'width .4s' }} />
                           </div>
                         )}
@@ -933,13 +958,13 @@ export default function SettingsPage() {
               </div>
             )}
 
-            <div style={{ height: 1, background: 'var(--bd)', margin: '30px 0' }} />
+            <hr className="rule-double" style={{ margin: '30px 0' }} />
 
             <SectionLabel>Pull a model from Ollama</SectionLabel>
             <p style={{ fontSize: 13, color: 'var(--fg-3)', lineHeight: 1.6, margin: '0 0 14px' }}>
               If you run Ollama, download a model from its library onto this server. Browse names at{' '}
               <a href="https://ollama.com/library" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--g-text)' }}>ollama.com/library</a>.
-              {!ollamaReachable && <span style={{ color: 'var(--fg-4)' }}> Ollama isn&apos;t running right now — use Hugging Face above for llama.cpp instead.</span>}
+              {!ollamaReachable && <span style={{ color: 'var(--fg-4)' }}> Ollama isn&apos;t running right now, use Hugging Face above for llama.cpp instead.</span>}
             </p>
             <div style={{ display: 'flex', gap: 8 }}>
               <input value={pullName} onChange={e => setPullName(e.target.value)} placeholder="e.g. llama3.2 or qwen2.5:7b" className="inp" style={{ flex: 1 }} disabled={pulling} onKeyDown={e => e.key === 'Enter' && pullModel()} />
@@ -947,13 +972,13 @@ export default function SettingsPage() {
             </div>
 
             {pulling && (
-              <div style={{ marginTop: 14, padding: '12px 16px', background: 'var(--bg-1)', border: '1px solid var(--bd)', borderRadius: 'var(--r-md)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--fg-3)', marginBottom: pullPct !== null ? 8 : 0, fontFamily: 'JetBrains Mono, monospace' }}>
+              <div style={{ marginTop: 14, padding: '12px 16px', background: 'var(--bg-1)', border: '1px solid var(--bd-2)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: 'var(--fg-3)', marginBottom: pullPct !== null ? 8 : 0, fontFamily: TYPE_FONT, letterSpacing: '0.04em' }}>
                   <span>{pullStatus || 'Working…'}</span>
                   {pullPct !== null && <span>{pullPct}%</span>}
                 </div>
                 {pullPct !== null && (
-                  <div style={{ height: 5, background: 'var(--bg-3)', borderRadius: 3, overflow: 'hidden' }}>
+                  <div style={{ height: 5, background: 'var(--bg-3)', overflow: 'hidden' }}>
                     <div style={{ height: '100%', width: `${pullPct}%`, background: 'var(--g)', transition: 'width .3s' }} />
                   </div>
                 )}
@@ -963,16 +988,16 @@ export default function SettingsPage() {
             <div style={{ marginTop: 28 }}>
               <SectionLabel>Installed</SectionLabel>
               {!ollamaReachable ? (
-                <p style={{ fontSize: 13, color: 'var(--fg-4)', padding: '14px 0' }}>Ollama is not reachable. Start it, or set <code style={{ fontFamily: 'JetBrains Mono, monospace' }}>OLLAMA_BASE_URL</code>.</p>
+                <p style={{ fontSize: 13, color: 'var(--fg-4)', padding: '14px 0' }}>Ollama is not reachable. Start it, or set <code style={{ fontFamily: MONO_FONT }}>OLLAMA_BASE_URL</code>.</p>
               ) : installed.length === 0 ? (
                 <p style={{ fontSize: 13, color: 'var(--fg-4)', padding: '14px 0' }}>No models installed yet. Pull one above.</p>
               ) : (
-                <div style={{ border: '1px solid var(--bd)', borderRadius: 'var(--r-md)', overflow: 'hidden' }}>
+                <div style={{ border: '1px solid var(--bd-2)', overflow: 'hidden' }}>
                   {installed.map(m => (
                     <div key={m.name} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: '1px solid var(--bd)', background: 'var(--bg-1)' }}>
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <p style={{ fontSize: 13, fontWeight: 500, color: 'var(--fg)', margin: 0 }}>{m.name}</p>
-                        <p style={{ fontSize: 11, color: 'var(--fg-4)', margin: '2px 0 0', fontFamily: 'JetBrains Mono, monospace' }}>{fmtSize(m.size)}</p>
+                        <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--fg)', margin: 0 }}>{m.name}</p>
+                        <p style={{ fontSize: 11, color: 'var(--fg-4)', margin: '2px 0 0', fontFamily: TYPE_FONT, letterSpacing: '0.04em' }}>{fmtSize(m.size)}</p>
                       </div>
                       <button onClick={() => deleteModel(m.name)} className="btn-ghost-sm" style={{ fontSize: 12, padding: '5px 10px', color: 'var(--err)', flexShrink: 0 }}>Remove</button>
                     </div>
@@ -987,17 +1012,59 @@ export default function SettingsPage() {
         {tab === 'appearance' && (
           <div className="anim-fade-in">
             <div style={{ marginBottom: 28 }}>
+              <SectionLabel>Edition</SectionLabel>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
+                {([['light', 'Morning edition', 'Aged paper, charcoal ink'], ['dark', 'Midnight edition', 'The same sheet read under a desk lamp']] as const).map(([val, name, desc]) => (
+                  <button key={val} onClick={() => setEdition(val)} style={{
+                    padding: 14, cursor: 'pointer', textAlign: 'left', transition: 'all .15s',
+                    border: `1px solid ${mode === val ? 'var(--g-bd)' : 'var(--bd)'}`,
+                    background: mode === val ? 'var(--g-dim)' : 'var(--bg-1)',
+                  }}>
+                    <p className="headline" style={{ fontSize: 15, color: mode === val ? 'var(--fg)' : 'var(--fg-3)', margin: 0, marginBottom: 4 }}>{name}</p>
+                    <p style={{ fontSize: 11, color: 'var(--fg-4)', margin: 0 }}>{desc}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 28 }}>
+              <SectionLabel>Press accent</SectionLabel>
+              <p style={{ fontSize: 12.5, color: 'var(--fg-3)', margin: '0 0 12px', lineHeight: 1.5 }}>The second colour of the edition. It recolors the whole app live and is saved on this device.</p>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 12 }}>
+                {ACCENTS.map(a => (
+                  <button key={a.hex} onClick={() => pickAccent(a.hex)} title={a.name} style={{
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7, padding: '11px 4px',
+                    border: `1px solid ${accent.toLowerCase() === a.hex ? 'var(--g-bd)' : 'var(--bd)'}`,
+                    background: accent.toLowerCase() === a.hex ? 'var(--g-dim)' : 'var(--bg-1)',
+                    cursor: 'pointer', fontFamily: TYPE_FONT, transition: 'all .15s',
+                  }}>
+                    <span style={{ width: 22, height: 22, background: a.hex, border: '1px solid var(--bd-2)' }} />
+                    <span style={{ fontSize: 10, letterSpacing: '0.08em', textTransform: 'uppercase', color: 'var(--fg-3)' }}>{a.name.split(' ')[0]}</span>
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--fg-2)', cursor: 'pointer' }}>
+                  <input type="color" value={accent} onChange={e => pickAccent(e.target.value)} style={{ width: 34, height: 28, border: '1px solid var(--bd-2)', background: 'transparent', cursor: 'pointer', padding: 0 }} />
+                  Custom
+                </label>
+                <span style={{ fontSize: 12, color: 'var(--fg-4)', fontFamily: MONO_FONT }}>{accent}</span>
+                <button onClick={() => pickAccent(null)} className="btn-ghost-sm" style={{ marginLeft: 'auto', fontSize: 12.5, padding: '6px 10px', color: 'var(--fg-3)' }}>Reset</button>
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 28 }}>
               <SectionLabel>Text size</SectionLabel>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
                 {(['small', 'medium', 'large'] as const).map(s => (
                   <button key={s} onClick={() => setFontSize(s)} style={{
-                    padding: '16px 8px', borderRadius: 'var(--r-md)', cursor: 'pointer',
-                    fontFamily: 'Inter, sans-serif', textAlign: 'center', transition: 'all .15s',
+                    padding: '16px 8px', cursor: 'pointer',
+                    textAlign: 'center', transition: 'all .15s',
                     border: `1px solid ${fontSize === s ? 'var(--g-bd)' : 'var(--bd)'}`,
                     background: fontSize === s ? 'var(--g-dim)' : 'var(--bg-1)',
                   }}>
                     <div style={{ fontSize: s === 'small' ? 14 : s === 'large' ? 20 : 17, color: fontSize === s ? 'var(--fg)' : 'var(--fg-3)', marginBottom: 6, fontWeight: 400 }}>Aa</div>
-                    <div style={{ fontSize: 11, color: fontSize === s ? 'var(--g-text)' : 'var(--fg-4)', fontWeight: fontSize === s ? 600 : 400, textTransform: 'capitalize', fontFamily: 'JetBrains Mono, monospace' }}>{s}</div>
+                    <div style={{ fontSize: 11, color: fontSize === s ? 'var(--g-text)' : 'var(--fg-4)', textTransform: 'capitalize', fontFamily: TYPE_FONT, letterSpacing: '0.08em' }}>{s}</div>
                   </button>
                 ))}
               </div>
@@ -1008,24 +1075,24 @@ export default function SettingsPage() {
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
                 {([['compact', 'Dense layout, more on screen'], ['comfortable', 'Spacious, easier to read']] as const).map(([val, desc]) => (
                   <button key={val} onClick={() => setDensity(val)} style={{
-                    padding: 14, borderRadius: 'var(--r-md)', cursor: 'pointer',
-                    fontFamily: 'Inter, sans-serif', textAlign: 'left', transition: 'all .15s',
+                    padding: 14, cursor: 'pointer',
+                    textAlign: 'left', transition: 'all .15s',
                     border: `1px solid ${density === val ? 'var(--g-bd)' : 'var(--bd)'}`,
                     background: density === val ? 'var(--g-dim)' : 'var(--bg-1)',
                   }}>
-                    <p style={{ fontSize: 13, fontWeight: 500, color: density === val ? 'var(--fg)' : 'var(--fg-3)', marginBottom: 4, textTransform: 'capitalize', margin: 0 }}>{val}</p>
+                    <p style={{ fontSize: 13, fontWeight: 600, color: density === val ? 'var(--fg)' : 'var(--fg-3)', marginBottom: 4, textTransform: 'capitalize', margin: 0 }}>{val}</p>
                     <p style={{ fontSize: 11, color: 'var(--fg-4)', marginTop: 4, margin: 0 }}>{desc}</p>
                   </button>
                 ))}
               </div>
             </div>
 
-            <div style={{ padding: '16px 20px', background: 'var(--bg-1)', border: '1px solid var(--bd)', borderRadius: 'var(--r-md)' }}>
+            <div style={{ padding: '16px 20px', background: 'var(--bg-1)', border: '1px solid var(--bd-2)' }}>
               <SectionLabel>About</SectionLabel>
               {[['Version', '2.4.0'], ['Stack', 'Next.js · SQLite · llama.cpp'], ['Privacy', 'Self-hosted · no telemetry'], ['Inference', 'llama.cpp · Ollama · LM Studio · optional API keys']].map(([k, v]) => (
                 <div key={k} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                  <span style={{ fontSize: 12, color: 'var(--fg-4)', fontFamily: 'JetBrains Mono, monospace' }}>{k}</span>
-                  <span style={{ fontSize: 12, color: k === 'Privacy' || k === 'Inference' ? 'var(--ok)' : 'var(--fg-2)', fontFamily: 'JetBrains Mono, monospace', fontWeight: k === 'Privacy' || k === 'Inference' ? 600 : 400 }}>{v}</span>
+                  <span style={{ fontSize: 12, color: 'var(--fg-4)', fontFamily: TYPE_FONT, letterSpacing: '0.08em', textTransform: 'uppercase' }}>{k}</span>
+                  <span style={{ fontSize: 12, color: k === 'Privacy' || k === 'Inference' ? 'var(--ok)' : 'var(--fg-2)', fontFamily: MONO_FONT, fontWeight: k === 'Privacy' || k === 'Inference' ? 600 : 400 }}>{v}</span>
                 </div>
               ))}
             </div>

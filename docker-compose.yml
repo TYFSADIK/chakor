@@ -23,6 +23,8 @@ services:
       AUTH_URL: ${AUTH_URL:-http://localhost:3001}
       REGISTRATION_MODE: ${REGISTRATION_MODE:-open}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      # Model downloads land in the data volume, not the container layer.
+      CHAKOR_MODELS_DIR: ${CHAKOR_MODELS_DIR:-/data/models}
       # API keys are optional. Set them in .env.local to enable cloud models.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -37,8 +39,11 @@ services:
     image: ollama/ollama:latest
     container_name: chakor-ollama
     profiles: ["ollama"]
+    # The app reaches Ollama over the compose network (see OLLAMA_BASE_URL
+    # above). This port is only for host-side tooling, and Ollama has no auth,
+    # so keep it on localhost instead of exposing it to the LAN.
     ports:
-      - "11434:11434"
+      - "127.0.0.1:11434:11434"
     volumes:
       - ollama-data:/root/.ollama
     restart: unless-stopped

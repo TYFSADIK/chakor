@@ -3,10 +3,14 @@ Description=Chakor (app + local model)
 After=network.target
 
 [Service]
+# Adjust both of these to your install: the user that should run Chakor and
+# the folder you cloned it into.
 User=ai
 WorkingDirectory=/home/ai/chakor
 Environment=NODE_ENV=production
-EnvironmentFile=/home/ai/chakor/.env.local
+# The leading '-' makes the file optional: the unit still starts if .env.local
+# is missing (defaults apply). Point it at wherever your .env.local lives.
+EnvironmentFile=-/home/ai/chakor/.env.local
 # Chakor runs llama-server itself, so this one unit is the whole stack.
 # NVIDIA only: uncomment to clear a wedged CUDA/UVM state before start (runs as root).
 #ExecStartPre=+/bin/sh -c 'modprobe -r nvidia_uvm 2>/dev/null || true; modprobe nvidia_uvm || true'

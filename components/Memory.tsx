@@ -19,76 +19,98 @@ export default function Memory({ initialMemories }: { initialMemories: Mem[] }) 
   const [text, setText] = useState('');
   const [editId, setEditId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
+  const [err, setErr] = useState('');
 
   async function add() {
     const content = text.trim();
     if (!content) return;
     try {
       const r = await fetch('/api/memories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ content }) });
-      const m = await r.json();
-      if (r.ok && m?.id) setMems((p) => sortMems([m, ...p]));
-    } catch { /* non-fatal */ }
-    setText('');
+      const m = await r.json().catch(() => null);
+      if (r.ok && m?.id) { setMems((p) => sortMems([m, ...p])); setText(''); setErr(''); }
+      else setErr('Could not save, your text is still here, try again');
+    } catch { setErr('Could not save, your text is still here, try again'); }
   }
-  async function patch(id: string, fields: Record<string, unknown>) {
-    try { await fetch(`/api/memories/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields) }); } catch { /* non-fatal */ }
+  async function patch(id: string, fields: Record<string, unknown>): Promise<boolean> {
+    try {
+      const r = await fetch(`/api/memories/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(fields) });
+      if (r.ok) { setErr(''); return true; }
+    } catch { /* fall through */ }
+    setErr('Could not save changes, please try again');
+    return false;
   }
-  function togglePin(m: Mem) {
+  async function togglePin(m: Mem) {
     const pinned = m.pinned ? 0 : 1;
     setMems((p) => sortMems(p.map((x) => (x.id === m.id ? { ...x, pinned } : x))));
-    patch(m.id, { pinned: !!pinned });
+    if (!await patch(m.id, { pinned: !!pinned })) setMems((p) => sortMems(p.map((x) => (x.id === m.id ? { ...x, pinned: m.pinned } : x))));
   }
   async function remove(id: string) {
-    await fetch(`/api/memories/${id}`, { method: 'DELETE' }).catch(() => {});
-    setMems((p) => p.filter((x) => x.id !== id));
+    if (!window.confirm('Delete this memory? This cannot be undone.')) return;
+    try {
+      const r = await fetch(`/api/memories/${id}`, { method: 'DELETE' });
+      if (!r.ok) throw new Error();
+      setMems((p) => p.filter((x) => x.id !== id));
+      setErr('');
+    } catch { setErr('Could not delete, please try again'); }
   }
-  function saveEdit() {
+  async function saveEdit() {
     if (!editId) return;
     const content = editText.trim();
-    if (content) { setMems((p) => p.map((x) => (x.id === editId ? { ...x, content } : x))); patch(editId, { content }); }
+    if (content) {
+      const id = editId;
+      const prev = mems.find((x) => x.id === id)?.content;
+      setMems((p) => p.map((x) => (x.id === id ? { ...x, content } : x)));
+      if (!await patch(id, { content })) setMems((p) => p.map((x) => (x.id === id ? { ...x, content: prev ?? x.content } : x)));
+    }
     setEditId(null); setEditText('');
   }
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'Inter,sans-serif' }}>
-      <header style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 18px', height: 54, borderBottom: '1px solid var(--bd)', position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 10 }}>
-        <Link href="/" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--fg-3)', textDecoration: 'none' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--fg)' }}>
+      <header style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 18px', height: 54, borderBottom: '3px double var(--fg)', position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 10 }}>
+        <Link href="/" className="byline" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none' }}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="15 18 9 12 15 6" /></svg>
           Chat
         </Link>
-        <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: '0.04em' }}>MEMORY</span>
-        <span style={{ fontSize: 12, color: 'var(--fg-4)', fontFamily: 'JetBrains Mono,monospace' }}>what {APP.name} remembers about you</span>
+        <span className="kicker" style={{ fontSize: 13 }}>Memory Ledger</span>
+        <span className="byline" style={{ marginLeft: 'auto', textTransform: 'none' }}>what {APP.name} remembers about you</span>
       </header>
 
       <div style={{ maxWidth: 720, margin: '0 auto', padding: '24px 18px 60px' }}>
-        <div style={{ background: 'var(--bg-2)', border: '1px solid var(--bd-2)', borderRadius: 12, padding: '12px 14px', marginBottom: 22 }}>
+        <div style={{ background: 'var(--bg-1)', border: '1px solid var(--bd-2)', borderTop: '3px double var(--fg)', borderRadius: 0, padding: '12px 14px', marginBottom: 22, boxShadow: 'var(--sh)' }}>
           <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Teach it something durable: your name, your stack, how you like answers…" rows={2}
             onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); add(); } }}
-            style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', resize: 'vertical', color: 'var(--fg)', fontFamily: 'Inter,sans-serif', fontSize: 14, lineHeight: 1.55, minHeight: 42 }} />
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6 }}>
-            <button onClick={add} disabled={!text.trim()} style={{ padding: '7px 18px', borderRadius: 8, background: text.trim() ? 'var(--g)' : 'var(--bg-3)', color: text.trim() ? '#04100a' : 'var(--fg-4)', border: 'none', fontSize: 13, fontWeight: 700, cursor: text.trim() ? 'pointer' : 'not-allowed', fontFamily: 'Inter,sans-serif' }}>Remember</button>
+            style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', resize: 'vertical', color: 'var(--fg)', fontSize: 14, lineHeight: 1.55, minHeight: 42 }} />
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 6, borderTop: '1px solid var(--bd)', paddingTop: 10 }}>
+            <button onClick={add} disabled={!text.trim()} className="btn btn-green" style={{ padding: '8px 18px' }}>Remember</button>
           </div>
         </div>
 
-        <p style={{ fontSize: 11.5, color: 'var(--fg-4)', marginBottom: 14, lineHeight: 1.5 }}>
+        {err && <p style={{ fontSize: 13, color: 'var(--err)', marginBottom: 14 }}>{err}</p>}
+
+        <p className="font-fell" style={{ fontSize: 14, color: 'var(--fg-3)', marginBottom: 18, lineHeight: 1.5 }}>
           These get quietly added to every chat so the assistant stays consistent. It can also save its own with the <strong>save_memory</strong> tool.
         </p>
 
+        <p className="kicker" style={{ marginBottom: 8 }}>On Record</p>
+        <hr className="rule-fat" style={{ marginBottom: 4 }} />
+
         {mems.length === 0
-          ? <p style={{ textAlign: 'center', fontSize: 14, color: 'var(--fg-4)', padding: '40px 0' }}>No memories yet. Add one above.</p>
+          ? <p className="font-fell" style={{ textAlign: 'center', fontSize: 15, color: 'var(--fg-4)', padding: '40px 0' }}>No memories yet. Add one above.</p>
           : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
               {mems.map((m) => (
-                <div key={m.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, background: 'var(--bg-1)', border: `1px solid ${m.pinned ? 'var(--g-bd)' : 'var(--bd)'}`, borderRadius: 10, padding: '11px 13px' }}>
+                <div key={m.id} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, borderBottom: '1px solid var(--bd-2)', borderLeft: m.pinned ? '2px solid var(--g)' : '2px solid transparent', background: m.pinned ? 'var(--g-dim)' : 'transparent', padding: '11px 8px 11px 12px' }}>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     {editId === m.id
                       ? <textarea value={editText} onChange={(e) => setEditText(e.target.value)} autoFocus rows={2}
                           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(); } if (e.key === 'Escape') { setEditId(null); setEditText(''); } }}
                           onBlur={saveEdit}
-                          style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--bd-2)', borderRadius: 6, outline: 'none', resize: 'vertical', color: 'var(--fg)', fontFamily: 'Inter,sans-serif', fontSize: 13.5, lineHeight: 1.5, padding: '6px 8px' }} />
-                      : <p style={{ fontSize: 13.5, color: 'var(--fg-2)', lineHeight: 1.5, wordBreak: 'break-word' }}>{m.content}</p>}
+                          className="inp"
+                          style={{ fontSize: 13.5, lineHeight: 1.5, padding: '6px 8px', resize: 'vertical' }} />
+                      : <p style={{ fontSize: 14, color: 'var(--fg-2)', lineHeight: 1.55, wordBreak: 'break-word' }}>{m.content}</p>}
                     {m.source === 'assistant' && editId !== m.id && (
-                      <span style={{ display: 'inline-block', marginTop: 5, fontSize: 10, color: 'var(--g-text)', fontFamily: 'JetBrains Mono,monospace', opacity: 0.8 }}>saved by assistant</span>
+                      <span className="byline" style={{ display: 'inline-block', marginTop: 5, fontSize: 10, color: 'var(--g-text)' }}>saved by assistant</span>
                     )}
                   </div>
                   <div style={{ display: 'flex', gap: 1, flexShrink: 0 }}>

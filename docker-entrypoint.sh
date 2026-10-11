@@ -3,6 +3,15 @@
 # generate one and keep it in the data volume so sessions survive restarts.
 set -e
 
+# The container runs as the non-root `node` user. Fresh named volumes inherit
+# the image's ownership, but a bind mount or an older volume may be owned by
+# root — and we cannot chown from here. Make sure /data (and the model
+# download dir) is usable, otherwise fail loudly instead of crashing later.
+if ! mkdir -p /data/models 2>/dev/null || [ ! -w /data ]; then
+  echo "[chakor] /data is not writable by $(id -un) — chown it to uid 1000 (the image's node user)" >&2
+  exit 1
+fi
+
 if [ -z "${AUTH_SECRET:-}" ]; then
   if [ -f /data/.auth_secret ]; then
     AUTH_SECRET="$(cat /data/.auth_secret)"

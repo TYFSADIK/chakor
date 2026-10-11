@@ -39,18 +39,32 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const selfId = (session!.user as unknown as { id: number }).id;
   const { id } = await params;
   const targetId = Number(id);
-  const body = await req.json().catch(() => ({}));
+  const body = await req.json().catch(() => null);
+  if (!body || typeof body !== 'object') {
+    return NextResponse.json({ error: 'invalid body' }, { status: 400 });
+  }
 
-  if (body.action === 'reset_password') {
+  if (body.action !== undefined) {
+    // Only known actions may run — anything else is a client bug or probe.
+    if (body.action !== 'reset_password') {
+      return NextResponse.json({ error: 'unknown action' }, { status: 400 });
+    }
     const tempPassword = randomBytes(6).toString('hex'); // 12-char hex
     const hash = await bcrypt.hash(tempPassword, 12);
     updatePassword(targetId, hash);
     return NextResponse.json({ ok: true, tempPassword });
   }
 
-  if (typeof body.is_admin === 'number') {
+  if (body.is_admin !== undefined) {
+    // Coerce strictly to 0|1; reject anything else instead of storing it raw.
+    const isAdmin = body.is_admin === 1 || body.is_admin === true ? 1
+      : body.is_admin === 0 || body.is_admin === false ? 0
+      : null;
+    if (isAdmin === null) {
+      return NextResponse.json({ error: 'is_admin must be 0 or 1' }, { status: 400 });
+    }
     // Prevent self-demotion if last admin
-    if (targetId === selfId && body.is_admin === 0) {
+    if (targetId === selfId && isAdmin === 0) {
       const adminCount = (
         db().prepare('SELECT COUNT(*) AS c FROM users WHERE is_admin = 1').get() as { c: number }
       ).c;
@@ -58,8 +72,9 @@ export async function PATCH(req: NextRequest, { params }: Params) {
         return NextResponse.json({ error: 'cannot demote the last admin' }, { status: 400 });
       }
     }
-    db().prepare('UPDATE users SET is_admin = ? WHERE id = ?').run(body.is_admin, targetId);
+    db().prepare('UPDATE users SET is_admin = ? WHERE id = ?').run(isAdmin, targetId);
+    return NextResponse.json({ ok: true });
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ error: 'unknown action' }, { status: 400 });
 }

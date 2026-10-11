@@ -33,7 +33,7 @@ export function useSpeechRecognition(lang?: string): SpeechRecognitionState {
     if (typeof window === 'undefined') return;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const SR = (window as any).SpeechRecognition ?? (window as any).webkitSpeechRecognition;
-    if (!SR) return;
+    if (!SR || recRef.current) return; // already listening — don't orphan a second instance
 
     finalRef.current = '';
     setTranscript('');
@@ -63,11 +63,13 @@ export function useSpeechRecognition(lang?: string): SpeechRecognitionState {
     };
 
     rec.onend = () => {
+      if (recRef.current === rec) recRef.current = null;
       setListening(false);
       setInterimTranscript('');
     };
 
     rec.onerror = () => {
+      if (recRef.current === rec) recRef.current = null;
       setListening(false);
       setInterimTranscript('');
     };

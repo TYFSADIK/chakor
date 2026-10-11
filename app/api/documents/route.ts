@@ -63,8 +63,9 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ id: docId, filename: file.name, chunks: chunks.length, size: file.size });
   } catch (err) {
+    // Keep the real detail (which can contain server paths from pdf-parse)
+    // server-side; the client gets a generic message.
     console.error('Document processing error:', err);
-    const msg = err instanceof Error ? err.message : 'Failed to process file';
-    return NextResponse.json({ error: msg }, { status: 500 });
+    return NextResponse.json({ error: 'Could not read that PDF' }, { status: 500 });
   }
 }

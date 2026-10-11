@@ -64,10 +64,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        {/* Apply a saved accent before paint so there is no flash of the default green. */}
+        {/* Apply saved theme mode + accent before paint (no flash). */}
         <script
           dangerouslySetInnerHTML={{
-            __html: `(function(){try{var a=localStorage.getItem('chakor-accent');if(!a)return;var m=/^#?([0-9a-fA-F]{6})$/.exec(a.trim());if(!m)return;var n=parseInt(m[1],16),r=(n>>16)&255,g=(n>>8)&255,b=n&255,s=document.documentElement.style;s.setProperty('--g','#'+m[1]);s.setProperty('--g-dim','rgba('+r+','+g+','+b+',0.08)');s.setProperty('--g-bd','rgba('+r+','+g+','+b+',0.2)');s.setProperty('--g-glow','0 0 20px rgba('+r+','+g+','+b+',0.25)');var lr=Math.round(r+(255-r)*0.45),lg=Math.round(g+(255-g)*0.45),lb=Math.round(b+(255-b)*0.45);s.setProperty('--g-text','rgb('+lr+','+lg+','+lb+')');}catch(e){}})();`,
+            __html: `(function(){try{var mode=localStorage.getItem('chakor-mode');if(mode==='dark')document.documentElement.classList.add('dark');var a=localStorage.getItem('chakor-accent');if(a){var m=/^#?([0-9a-fA-F]{6})$/.exec(a.trim());if(m){var n=parseInt(m[1],16),r=(n>>16)&255,g=(n>>8)&255,b=n&255,s=document.documentElement.style;s.setProperty('--g','#'+m[1]);s.setProperty('--g-dim','rgba('+r+','+g+','+b+',0.08)');s.setProperty('--g-bd','rgba('+r+','+g+','+b+',0.3)');var lr=Math.round(r+(255-r)*0.45),lg=Math.round(g+(255-g)*0.45),lb=Math.round(b+(255-b)*0.45);s.setProperty('--g-text','rgb('+lr+','+lg+','+lb+')');}}}catch(e){}})();`,
           }}
         />
       </head>

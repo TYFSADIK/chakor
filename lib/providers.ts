@@ -1,4 +1,6 @@
 import type { ChatMessage, ContentPart, LlamaStats } from './llama';
+import { idleWatchdog } from './llama';
+import { logger, errText } from './logger';
 
 // Re-export for use in chat route
 export type { ChatMessage };
@@ -37,6 +39,7 @@ function toGoogleParts(content: string | ContentPart[]) {
 async function* readOpenAISSE(
   res: Response,
   onStats?: StatsCb,
+  onChunk?: () => void,
 ): AsyncGenerator<string> {
   const reader = res.body!.getReader();
   const decoder = new TextDecoder();
@@ -49,6 +52,7 @@ async function* readOpenAISSE(
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      onChunk?.();
       buffer += decoder.decode(value, { stream: true });
       const events = buffer.split('\n\n');
       buffer = events.pop() ?? '';
@@ -101,19 +105,33 @@ export async function* streamOpenAI(
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error('OPENAI_API_KEY not configured');
 
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model: modelId, messages, stream: true, stream_options: { include_usage: true } }),
-    signal,
-  });
+  const wd = idleWatchdog(signal);
+  let res: Response;
+  try {
+    res = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+      body: JSON.stringify({ model: modelId, messages, stream: true, stream_options: { include_usage: true } }),
+      signal: wd.signal,
+    });
+  } catch (e) {
+    wd.done();
+    logger.warn('provider chat request failed', { provider: 'openai', model: modelId, err: errText(e) });
+    throw e;
+  }
 
   if (!res.ok) {
+    wd.done();
     const text = await res.text().catch(() => '');
+    logger.warn('provider chat HTTP error', { provider: 'openai', model: modelId, status: res.status });
     throw new Error(`OpenAI ${res.status}: ${text.slice(0, 300)}`);
   }
 
-  yield* readOpenAISSE(res, onStats);
+  try {
+    yield* readOpenAISSE(res, onStats, wd.reset);
+  } finally {
+    wd.done();
+  }
 }
 
 export async function* streamOllama(
@@ -128,25 +146,39 @@ export async function* streamOllama(
   // Ollama exposes an OpenAI-compatible endpoint, so we can reuse the same reader.
   // num_ctx actually resizes the model's context window per request — this is what
   // makes the UI's "context length" control real for Ollama models.
-  const res = await fetch(`${base}/v1/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: modelId,
-      messages,
-      stream: true,
-      stream_options: { include_usage: true },
-      ...(numCtx && numCtx > 0 ? { options: { num_ctx: Math.round(numCtx) } } : {}),
-    }),
-    signal,
-  });
+  const wd = idleWatchdog(signal);
+  let res: Response;
+  try {
+    res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: modelId,
+        messages,
+        stream: true,
+        stream_options: { include_usage: true },
+        ...(numCtx && numCtx > 0 ? { options: { num_ctx: Math.round(numCtx) } } : {}),
+      }),
+      signal: wd.signal,
+    });
+  } catch (e) {
+    wd.done();
+    logger.warn('provider chat request failed', { provider: 'ollama', model: modelId, err: errText(e) });
+    throw e;
+  }
 
   if (!res.ok) {
+    wd.done();
     const text = await res.text().catch(() => '');
+    logger.warn('provider chat HTTP error', { provider: 'ollama', model: modelId, status: res.status });
     throw new Error(`Ollama ${res.status}: ${text.slice(0, 300)}`);
   }
 
-  yield* readOpenAISSE(res, onStats);
+  try {
+    yield* readOpenAISSE(res, onStats, wd.reset);
+  } finally {
+    wd.done();
+  }
 }
 
 export async function* streamLmStudio(
@@ -159,19 +191,33 @@ export async function* streamLmStudio(
   // Ollama. The context window is fixed when the model is loaded inside LM Studio
   // (there's no per-request num_ctx knob like Ollama), so we don't send one.
   const { LMSTUDIO_BASE_URL } = await import('./models');
-  const res = await fetch(`${LMSTUDIO_BASE_URL}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: modelId, messages, stream: true, stream_options: { include_usage: true } }),
-    signal,
-  });
+  const wd = idleWatchdog(signal);
+  let res: Response;
+  try {
+    res = await fetch(`${LMSTUDIO_BASE_URL}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: modelId, messages, stream: true, stream_options: { include_usage: true } }),
+      signal: wd.signal,
+    });
+  } catch (e) {
+    wd.done();
+    logger.warn('provider chat request failed', { provider: 'lmstudio', model: modelId, err: errText(e) });
+    throw e;
+  }
 
   if (!res.ok) {
+    wd.done();
     const text = await res.text().catch(() => '');
+    logger.warn('provider chat HTTP error', { provider: 'lmstudio', model: modelId, status: res.status });
     throw new Error(`LM Studio ${res.status}: ${text.slice(0, 300)}`);
   }
 
-  yield* readOpenAISSE(res, onStats);
+  try {
+    yield* readOpenAISSE(res, onStats, wd.reset);
+  } finally {
+    wd.done();
+  }
 }
 
 export async function* streamOpenRouter(
@@ -183,26 +229,40 @@ export async function* streamOpenRouter(
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error('OPENROUTER_API_KEY not configured');
 
-  const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-      // OpenRouter uses these for attribution / rankings (optional but recommended).
-      'HTTP-Referer': process.env.APP_URL ?? process.env.AUTH_URL ?? 'http://localhost:3001',
-      'X-Title': process.env.APP_NAME ?? 'Chakor',
-    },
-    body: JSON.stringify({ model: modelId, messages, stream: true, stream_options: { include_usage: true } }),
-    signal,
-  });
+  const wd = idleWatchdog(signal);
+  let res: Response;
+  try {
+    res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+        // OpenRouter uses these for attribution / rankings (optional but recommended).
+        'HTTP-Referer': process.env.APP_URL ?? process.env.AUTH_URL ?? 'http://localhost:3001',
+        'X-Title': process.env.APP_NAME ?? 'Chakor',
+      },
+      body: JSON.stringify({ model: modelId, messages, stream: true, stream_options: { include_usage: true } }),
+      signal: wd.signal,
+    });
+  } catch (e) {
+    wd.done();
+    logger.warn('provider chat request failed', { provider: 'openrouter', model: modelId, err: errText(e) });
+    throw e;
+  }
 
   if (!res.ok) {
+    wd.done();
     const text = await res.text().catch(() => '');
+    logger.warn('provider chat HTTP error', { provider: 'openrouter', model: modelId, status: res.status });
     throw new Error(`OpenRouter ${res.status}: ${text.slice(0, 300)}`);
   }
 
   // OpenRouter is OpenAI-compatible — reuse the same SSE reader.
-  yield* readOpenAISSE(res, onStats);
+  try {
+    yield* readOpenAISSE(res, onStats, wd.reset);
+  } finally {
+    wd.done();
+  }
 }
 
 export async function* streamAnthropic(
@@ -219,25 +279,35 @@ export async function* streamAnthropic(
     .filter((m) => m.role !== 'system')
     .map((m) => ({ role: m.role, content: toAnthropicContent(m.content) }));
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
-      model: modelId,
-      max_tokens: 8192,
-      system,
-      messages: userAssistantMessages,
-      stream: true,
-    }),
-    signal,
-  });
+  const wd = idleWatchdog(signal);
+  let res: Response;
+  try {
+    res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+      },
+      body: JSON.stringify({
+        model: modelId,
+        max_tokens: 8192,
+        system,
+        messages: userAssistantMessages,
+        stream: true,
+      }),
+      signal: wd.signal,
+    });
+  } catch (e) {
+    wd.done();
+    logger.warn('provider chat request failed', { provider: 'anthropic', model: modelId, err: errText(e) });
+    throw e;
+  }
 
   if (!res.ok) {
+    wd.done();
     const text = await res.text().catch(() => '');
+    logger.warn('provider chat HTTP error', { provider: 'anthropic', model: modelId, status: res.status });
     throw new Error(`Anthropic ${res.status}: ${text.slice(0, 300)}`);
   }
 
@@ -251,6 +321,7 @@ export async function* streamAnthropic(
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      wd.reset();
       buffer += decoder.decode(value, { stream: true });
       const events = buffer.split('\n\n');
       buffer = events.pop() ?? '';
@@ -276,6 +347,7 @@ export async function* streamAnthropic(
       const ms = Date.now() - start;
       onStats({ promptTokens, generationTokens: completionTokens, generationMs: ms, tokensPerSecond: ms > 0 ? completionTokens / (ms / 1000) : 0 });
     }
+    wd.done();
     reader.releaseLock();
   }
 }
@@ -297,22 +369,32 @@ export async function* streamGoogle(
       parts: toGoogleParts(m.content),
     }));
 
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?key=${apiKey}&alt=sse`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        system_instruction: { parts: [{ text: system }] },
-        contents,
-        generationConfig: { maxOutputTokens: 8192, temperature: 0.7 },
-      }),
-      signal,
-    },
-  );
+  const wd = idleWatchdog(signal);
+  let res: Response;
+  try {
+    res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?key=${apiKey}&alt=sse`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          system_instruction: { parts: [{ text: system }] },
+          contents,
+          generationConfig: { maxOutputTokens: 8192, temperature: 0.7 },
+        }),
+        signal: wd.signal,
+      },
+    );
+  } catch (e) {
+    wd.done();
+    logger.warn('provider chat request failed', { provider: 'google', model: modelId, err: errText(e) });
+    throw e;
+  }
 
   if (!res.ok) {
+    wd.done();
     const text = await res.text().catch(() => '');
+    logger.warn('provider chat HTTP error', { provider: 'google', model: modelId, status: res.status });
     throw new Error(`Google AI ${res.status}: ${text.slice(0, 300)}`);
   }
 
@@ -326,6 +408,7 @@ export async function* streamGoogle(
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      wd.reset();
       buffer += decoder.decode(value, { stream: true });
       const events = buffer.split('\n\n');
       buffer = events.pop() ?? '';
@@ -350,6 +433,7 @@ export async function* streamGoogle(
       const ms = Date.now() - start;
       onStats({ promptTokens, generationTokens: completionTokens, generationMs: ms, tokensPerSecond: ms > 0 ? completionTokens / (ms / 1000) : 0 });
     }
+    wd.done();
     reader.releaseLock();
   }
 }

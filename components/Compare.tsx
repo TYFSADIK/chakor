@@ -33,16 +33,24 @@ export default function Compare() {
   const [voted, setVoted] = useState<string | null>(null);
   const [board, setBoard] = useState<Board[]>([]);
   const abortRef = useRef<AbortController[]>([]);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+      abortRef.current.forEach((c) => c.abort());
+    };
+  }, []);
 
   const nameOf = useCallback((id: string) => models.find((m) => m.id === id)?.name ?? id, [models]);
 
   const loadBoard = useCallback(() => {
-    fetch('/api/compare/leaderboard').then((r) => r.json()).then((d: Board[]) => setBoard(Array.isArray(d) ? d : [])).catch(() => {});
+    fetch('/api/compare/leaderboard').then((r) => r.json()).then((d: Board[]) => { if (mountedRef.current) setBoard(Array.isArray(d) ? d : []); }).catch(() => {});
   }, []);
 
   useEffect(() => {
     fetch('/api/models').then((r) => r.json()).then((ms: Model[]) => {
-      if (!Array.isArray(ms)) return;
+      if (!Array.isArray(ms) || !mountedRef.current) return;
       setModels(ms);
       setSelected(ms.slice(0, 2).map((m) => m.id));
     }).catch(() => {});
@@ -54,31 +62,36 @@ export default function Compare() {
   }
 
   async function streamOne(modelId: string, signal: AbortSignal) {
+    const setRes = (fn: (p: Record<string, Result>) => Record<string, Result>) => { if (mountedRef.current) setResults(fn); };
     try {
       const r = await fetch('/api/compare', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ prompt: prompt.trim(), modelId }), signal,
       });
-      if (!r.ok || !r.body) { setResults((p) => ({ ...p, [modelId]: { ...p[modelId], error: `HTTP ${r.status}`, done: true } })); return; }
+      if (!r.ok || !r.body) {
+        const d = await r.json().catch(() => null) as { error?: string } | null;
+        setRes((p) => ({ ...p, [modelId]: { ...p[modelId], error: d?.error ?? `HTTP ${r.status}`, done: true } }));
+        return;
+      }
       const reader = r.body.getReader(); const dec = new TextDecoder(); let buf = '';
       while (true) {
         const { done, value } = await reader.read(); if (done) break;
         buf += dec.decode(value, { stream: true }); const parts = buf.split('\n\n'); buf = parts.pop() ?? '';
         for (const part of parts) {
-          const line = part.trim(); if (!line.startsWith('data:')) continue;
-          const data = line.slice(5).trim(); if (data === '[DONE]') continue;
+          const data = part.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('\n');
+          if (!data || data === '[DONE]') continue;
           try {
             const obj = JSON.parse(data) as { delta?: string; stats?: Stats; error?: string };
-            if (obj.delta) setResults((p) => ({ ...p, [modelId]: { ...p[modelId], content: (p[modelId]?.content ?? '') + obj.delta } }));
-            if (obj.stats) setResults((p) => ({ ...p, [modelId]: { ...p[modelId], stats: obj.stats } }));
-            if (obj.error) setResults((p) => ({ ...p, [modelId]: { ...p[modelId], error: obj.error, done: true } }));
+            if (obj.delta) setRes((p) => ({ ...p, [modelId]: { ...p[modelId], content: (p[modelId]?.content ?? '') + obj.delta } }));
+            if (obj.stats) setRes((p) => ({ ...p, [modelId]: { ...p[modelId], stats: obj.stats } }));
+            if (obj.error) setRes((p) => ({ ...p, [modelId]: { ...p[modelId], error: obj.error, done: true } }));
           } catch { /* skip frame */ }
         }
       }
     } catch (e) {
-      if (!(e instanceof Error && e.name === 'AbortError')) setResults((p) => ({ ...p, [modelId]: { ...p[modelId], error: 'connection error', done: true } }));
+      if (!(e instanceof Error && e.name === 'AbortError')) setRes((p) => ({ ...p, [modelId]: { ...p[modelId], error: 'connection error', done: true } }));
     } finally {
-      setResults((p) => ({ ...p, [modelId]: { ...p[modelId], done: true } }));
+      setRes((p) => ({ ...p, [modelId]: { ...p[modelId], done: true } }));
     }
   }
 
@@ -91,7 +104,7 @@ export default function Compare() {
     const controllers = order.map(() => new AbortController());
     abortRef.current = controllers;
     await Promise.all(order.map((id, i) => streamOne(id, controllers[i].signal)));
-    setRunning(false);
+    if (mountedRef.current) setRunning(false);
   }
 
   function stop() { abortRef.current.forEach((c) => c.abort()); setRunning(false); }
@@ -110,28 +123,29 @@ export default function Compare() {
   const hasRun = runOrder.length > 0;
 
   return (
-    <div style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--fg)', fontFamily: 'Inter,sans-serif' }}>
+    <div style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--fg)' }}>
       {/* Header */}
-      <header style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 18px', height: 54, borderBottom: '1px solid var(--bd)', position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 10 }}>
-        <Link href="/" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--fg-3)', textDecoration: 'none' }}>
+      <header style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '0 18px', height: 54, borderBottom: '3px double var(--fg)', position: 'sticky', top: 0, background: 'var(--bg)', zIndex: 10 }}>
+        <Link href="/" className="byline" style={{ display: 'inline-flex', alignItems: 'center', gap: 6, textDecoration: 'none' }}>
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><polyline points="15 18 9 12 15 6" /></svg>
           Chat
         </Link>
-        <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: '0.04em' }}>COMPARE</span>
-        <span style={{ fontSize: 12, color: 'var(--fg-4)', fontFamily: 'JetBrains Mono,monospace' }}>blind model A/B for {APP.name}</span>
+        <span className="kicker" style={{ fontSize: 13 }}>The Arena</span>
+        <span className="byline" style={{ marginLeft: 'auto', textTransform: 'none' }}>blind model A/B for {APP.name}</span>
       </header>
 
       <div style={{ maxWidth: 1200, margin: '0 auto', padding: '22px 18px 60px' }}>
         {/* Controls */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 22 }}>
           <div>
-            <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'JetBrains Mono,monospace', marginBottom: 8 }}>Models ({selected.length}/{MAX})</p>
+            <p className="kicker" style={{ marginBottom: 8 }}>Contenders ({selected.length}/{MAX})</p>
             <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
               {models.map((m) => {
                 const on = selected.includes(m.id);
                 return (
                   <button key={m.id} onClick={() => toggle(m.id)} disabled={!on && selected.length >= MAX}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 20, fontSize: 12.5, fontWeight: 500, cursor: (!on && selected.length >= MAX) ? 'not-allowed' : 'pointer', border: `1px solid ${on ? 'var(--g-bd)' : 'var(--bd-2)'}`, background: on ? 'var(--g-dim)' : 'transparent', color: on ? 'var(--g-text)' : 'var(--fg-3)', opacity: (!on && selected.length >= MAX) ? 0.4 : 1, fontFamily: 'Inter,sans-serif' }}>
+                    className="font-type"
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 0, fontSize: 12, letterSpacing: '0.04em', cursor: (!on && selected.length >= MAX) ? 'not-allowed' : 'pointer', border: `1px solid ${on ? 'var(--g-bd)' : 'var(--bd-2)'}`, background: on ? 'var(--g-dim)' : 'transparent', color: on ? 'var(--g-text)' : 'var(--fg-3)', opacity: (!on && selected.length >= MAX) ? 0.4 : 1 }}>
                     {m.name}
                   </button>
                 );
@@ -143,51 +157,54 @@ export default function Compare() {
           <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3}
             placeholder="Ask the same thing of every model…"
             onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); run(); } }}
-            style={{ width: '100%', background: 'var(--bg-2)', border: '1px solid var(--bd-2)', borderRadius: 10, color: 'var(--fg)', fontFamily: 'Inter,sans-serif', fontSize: 14.5, lineHeight: 1.6, padding: '12px 14px', outline: 'none', resize: 'vertical', minHeight: 70 }} />
+            className="inp"
+            style={{ lineHeight: 1.6, resize: 'vertical', minHeight: 70 }} />
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <button onClick={() => setBlind((b) => !b)}
-              style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 12px', borderRadius: 8, fontSize: 13, cursor: 'pointer', border: `1px solid ${blind ? 'var(--g-bd)' : 'var(--bd-2)'}`, background: blind ? 'var(--g-dim)' : 'transparent', color: blind ? 'var(--g-text)' : 'var(--fg-3)', fontFamily: 'Inter,sans-serif' }}>
-              <span style={{ width: 14, height: 14, borderRadius: 4, border: `1.5px solid ${blind ? 'var(--g)' : 'var(--bd-2)'}`, background: blind ? 'var(--g)' : 'transparent', color: '#04100a', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{blind && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><polyline points="20 6 9 17 4 12" /></svg>}</span>
+              className="font-type"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '7px 12px', borderRadius: 0, fontSize: 12, letterSpacing: '0.04em', cursor: 'pointer', border: `1px solid ${blind ? 'var(--g-bd)' : 'var(--bd-2)'}`, background: blind ? 'var(--g-dim)' : 'transparent', color: blind ? 'var(--g-text)' : 'var(--fg-3)' }}>
+              <span style={{ width: 14, height: 14, borderRadius: 0, border: `1.5px solid ${blind ? 'var(--g)' : 'var(--bd-2)'}`, background: blind ? 'var(--g)' : 'transparent', color: 'var(--bg)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{blind && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><polyline points="20 6 9 17 4 12" /></svg>}</span>
               Blind test
             </button>
             {running
-              ? <button onClick={stop} style={{ padding: '8px 18px', borderRadius: 8, background: 'var(--bg-3)', border: '1px solid var(--bd-2)', color: 'var(--fg-2)', fontSize: 13.5, fontWeight: 600, cursor: 'pointer', fontFamily: 'Inter,sans-serif' }}>Stop</button>
-              : <button onClick={run} disabled={selected.length < 2 || !prompt.trim()}
-                  style={{ padding: '8px 22px', borderRadius: 8, background: (selected.length >= 2 && prompt.trim()) ? 'var(--g)' : 'var(--bg-3)', color: (selected.length >= 2 && prompt.trim()) ? '#04100a' : 'var(--fg-4)', border: 'none', fontSize: 13.5, fontWeight: 700, cursor: (selected.length >= 2 && prompt.trim()) ? 'pointer' : 'not-allowed', fontFamily: 'Inter,sans-serif' }}>
+              ? <button onClick={stop} className="btn btn-outline" style={{ padding: '8px 18px' }}>Stop</button>
+              : <button onClick={run} disabled={selected.length < 2 || !prompt.trim()} className="btn btn-green" style={{ padding: '9px 22px' }}>
                   Run compare
                 </button>}
-            {blind && hasRun && !revealed && <button onClick={() => setRevealed(true)} style={{ padding: '8px 14px', borderRadius: 8, background: 'transparent', border: '1px solid var(--bd-2)', color: 'var(--fg-3)', fontSize: 13, cursor: 'pointer', fontFamily: 'Inter,sans-serif' }}>Reveal models</button>}
-            <span style={{ fontSize: 11.5, color: 'var(--fg-4)', fontFamily: 'JetBrains Mono,monospace' }}>Cmd/Ctrl + Enter to run</span>
+            {blind && hasRun && !revealed && <button onClick={() => setRevealed(true)} className="btn btn-outline" style={{ padding: '8px 14px' }}>Reveal models</button>}
+            <span className="byline" style={{ textTransform: 'none' }}>Cmd/Ctrl + Enter to run</span>
           </div>
         </div>
 
-        {/* Columns */}
+        {/* Columns: the versus broadsheet */}
         {hasRun && (
-          <div style={{ display: 'flex', gap: 14, overflowX: 'auto', paddingBottom: 8 }}>
+          <div style={{ display: 'flex', overflowX: 'auto', border: '1px solid var(--bd-2)', borderTop: '3px double var(--fg)', background: 'var(--bg-1)', boxShadow: 'var(--sh)' }}>
             {runOrder.map((id, i) => {
               const res = results[id] ?? { content: '', done: false };
               const isWinner = voted === id;
               const label = (blind && !revealed) ? `Model ${LABELS[i]}` : nameOf(id);
               return (
-                <div key={id} style={{ flex: '1 1 0', minWidth: 300, display: 'flex', flexDirection: 'column', background: 'var(--bg-1)', border: `1px solid ${isWinner ? 'var(--g)' : 'var(--bd)'}`, borderRadius: 12, overflow: 'hidden' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 14px', borderBottom: '1px solid var(--bd)', background: isWinner ? 'var(--g-dim)' : 'transparent' }}>
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: isWinner ? 'var(--g-text)' : 'var(--fg)' }}>
-                      <span style={{ width: 20, height: 20, borderRadius: 6, background: 'var(--bg-3)', color: 'var(--fg-3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontFamily: 'JetBrains Mono,monospace' }}>{LABELS[i]}</span>
-                      {label}
+                <div key={id} style={{ flex: '1 1 0', minWidth: 300, display: 'flex', flexDirection: 'column', borderLeft: i > 0 ? '1px solid var(--bd-3)' : 'none', background: isWinner ? 'var(--g-dim)' : 'transparent' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '10px 14px', borderBottom: '1px solid var(--bd-2)' }}>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                      <span className="font-type" style={{ width: 20, height: 20, borderRadius: 0, border: '1px solid var(--bd-3)', background: 'var(--bg-2)', color: 'var(--fg-2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, flexShrink: 0 }}>{LABELS[i]}</span>
+                      <span className="headline" style={{ fontSize: 14.5, color: isWinner ? 'var(--g-text)' : 'var(--fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
                     </span>
-                    {res.stats && <span style={{ fontSize: 10.5, color: 'var(--fg-4)', fontFamily: 'JetBrains Mono,monospace' }}>{res.stats.tokensPerSecond.toFixed(1)} t/s</span>}
+                    {isWinner && <span className="stamp" style={{ fontSize: 9, padding: '2px 7px' }}>Winner</span>}
+                    {res.stats && <span className="byline" style={{ textTransform: 'none', flexShrink: 0 }}>{res.stats.tokensPerSecond.toFixed(1)} t/s</span>}
                   </div>
                   <div style={{ flex: 1, padding: '14px 16px', minHeight: 200, maxHeight: 540, overflowY: 'auto', fontSize: 14 }} className="prose-ai">
                     {res.error
                       ? <p style={{ color: 'var(--err)', fontSize: 13 }}>{res.error}</p>
                       : res.content
                         ? <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{res.done ? res.content : res.content + '▋'}</ReactMarkdown>
-                        : <span style={{ color: 'var(--fg-4)', fontSize: 13 }}>{res.done ? '(no output)' : 'Thinking…'}</span>}
+                        : <span className="font-fell" style={{ color: 'var(--fg-4)', fontSize: 14 }}>{res.done ? '(no output)' : 'Thinking…'}</span>}
                   </div>
-                  <div style={{ padding: '10px 14px', borderTop: '1px solid var(--bd)' }}>
+                  <div style={{ padding: '10px 14px', borderTop: '1px solid var(--bd-2)' }}>
                     <button onClick={() => vote(id)} disabled={!!voted}
-                      style={{ width: '100%', padding: '8px 0', borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: voted ? 'default' : 'pointer', border: `1px solid ${isWinner ? 'var(--g)' : 'var(--bd-2)'}`, background: isWinner ? 'var(--g)' : 'transparent', color: isWinner ? '#04100a' : 'var(--fg-2)', fontFamily: 'Inter,sans-serif', opacity: (voted && !isWinner) ? 0.5 : 1 }}>
+                      className={isWinner ? 'btn btn-green' : 'btn btn-outline'}
+                      style={{ width: '100%', padding: '8px 0', cursor: voted ? 'default' : 'pointer', opacity: (voted && !isWinner) ? 0.5 : 1 }}>
                       {isWinner ? 'Winner ✓' : 'Pick this one'}
                     </button>
                   </div>
@@ -198,28 +215,29 @@ export default function Compare() {
         )}
 
         {voted && (
-          <p style={{ marginTop: 14, fontSize: 13.5, color: 'var(--g-text)' }}>
+          <p className="font-fell" style={{ marginTop: 14, fontSize: 14.5, color: 'var(--g-text)' }}>
             You picked <strong>{nameOf(voted)}</strong>. Recorded in the leaderboard below.
           </p>
         )}
 
         {/* Leaderboard */}
-        <div style={{ marginTop: 34 }}>
-          <p style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-4)', textTransform: 'uppercase', letterSpacing: '0.08em', fontFamily: 'JetBrains Mono,monospace', marginBottom: 10 }}>Your leaderboard</p>
+        <div style={{ marginTop: 34, maxWidth: 520 }}>
+          <p className="kicker" style={{ marginBottom: 8 }}>Your Leaderboard</p>
+          <hr className="rule-fat" style={{ marginBottom: 4 }} />
           {board.length === 0
-            ? <p style={{ fontSize: 13, color: 'var(--fg-4)' }}>No votes yet. Run a comparison and pick a winner.</p>
+            ? <p className="font-fell" style={{ fontSize: 14, color: 'var(--fg-4)', padding: '12px 0' }}>No votes yet. Run a comparison and pick a winner.</p>
             : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxWidth: 460 }}>
+              <div style={{ display: 'flex', flexDirection: 'column' }}>
                 {board.map((b, i) => {
                   const max = board[0].wins || 1;
                   return (
-                    <div key={b.model} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <span style={{ width: 18, fontSize: 12, color: 'var(--fg-4)', fontFamily: 'JetBrains Mono,monospace' }}>{i + 1}</span>
-                      <span style={{ flex: 1, minWidth: 0, fontSize: 13, color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nameOf(b.model)}</span>
-                      <div style={{ width: 140, height: 7, background: 'var(--bg-3)', borderRadius: 4, overflow: 'hidden' }}>
-                        <div style={{ width: `${(b.wins / max) * 100}%`, height: '100%', background: 'var(--g)', opacity: 0.8 }} />
+                    <div key={b.model} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 0', borderBottom: '1px solid var(--bd)' }}>
+                      <span className="font-type" style={{ width: 18, fontSize: 12, color: 'var(--fg-4)' }}>{i + 1}</span>
+                      <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, color: 'var(--fg-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{nameOf(b.model)}</span>
+                      <div style={{ width: 140, height: 8, background: 'var(--bg-2)', border: '1px solid var(--bd-2)', borderRadius: 0, overflow: 'hidden' }}>
+                        <div style={{ width: `${(b.wins / max) * 100}%`, height: '100%', background: 'var(--g)', opacity: 0.85 }} />
                       </div>
-                      <span style={{ width: 28, textAlign: 'right', fontSize: 12, color: 'var(--fg-3)', fontFamily: 'JetBrains Mono,monospace' }}>{b.wins}</span>
+                      <span className="font-type" style={{ width: 28, textAlign: 'right', fontSize: 12, color: 'var(--fg-3)' }}>{b.wins}</span>
                     </div>
                   );
                 })}

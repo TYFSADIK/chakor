@@ -14,11 +14,13 @@ import { streamForModel } from '@/lib/dispatch';
 import type { ChatMessage, ContentPart } from '@/lib/llama';
 import { runAgent, supportsTools } from '@/lib/agent';
 import { searxSearch, formatSearchContext } from '@/lib/searxng';
+import { runDeepResearch } from '@/lib/research';
 import { bm25Search, formatRagContext } from '@/lib/rag';
 import { getModel, llamaEndpoint, defaultModel } from '@/lib/models';
 import { buildSystemPrompt, buildResearchPrompt } from '@/lib/system-prompt';
-import { engineForProvider, activateEngine, lastActiveEngine } from '@/lib/backends';
+import { engineForProvider, activateEngine, lastActiveEngine, trackChatStart, trackChatEnd } from '@/lib/backends';
 import { readAppSettings } from '@/lib/app-settings';
+import { logger, errText } from '@/lib/logger';
 import { randomUUID } from 'node:crypto';
 
 export async function POST(req: NextRequest) {
@@ -99,12 +101,14 @@ export async function POST(req: NextRequest) {
     isNewConv = true;
   }
 
-  const priorMessages = listMessages(convId);
+  // Cap history load — the dispatch layer trims to fit context anyway.
+  const priorMessages = listMessages(convId, 200);
   const isFirstMessage = priorMessages.length === 0;
 
   // Build user content — RAG → Deep Research / Search → plain
   let userContent = text;
   let searchSources: { title: string; url: string; snippet?: string }[] = [];
+  const researchSteps: { name: string; args: string; result: string }[] = [];
 
   if (useRag) {
     try {
@@ -118,68 +122,24 @@ export async function POST(req: NextRequest) {
 
   if (useDeepResearch || useSearch) {
     try {
-      let queries = [text];
-
       if (useDeepResearch) {
-        // Plan the research: ask the local model for distinct angles to search,
-        // so we cover the topic from several directions instead of one query.
-        try {
-          const llama = llamaEndpoint();
-          const relRes = await fetch(`${llama.url}/v1/chat/completions`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: llama.label,
-              messages: [{
-                role: 'user',
-                content:
-                  `You are planning web research for this question:\n"${text.slice(0, 300)}"\n\n` +
-                  `Write 3 distinct, specific search queries that together cover the most important angles ` +
-                  `(definitions, current state, comparisons, evidence, criticism). ` +
-                  `Return ONLY the queries, one per line, no numbering, no quotes.`,
-              }],
-              stream: false,
-              temperature: 0.4,
-              max_tokens: 120,
-            }),
-            signal: AbortSignal.timeout(8_000),
-          });
-          if (relRes.ok) {
-            const rj = await relRes.json();
-            const extra = (rj.choices?.[0]?.message?.content ?? '')
-              .trim()
-              .split('\n')
-              .map((q: string) => q.replace(/^[-*\d.)\s"']+/, '').trim())
-              .filter(Boolean)
-              .slice(0, 3);
-            queries = [text, ...extra];
-          }
-        } catch { /* use original query only */ }
-      }
-
-      const resultsArrays = await Promise.all(
-        queries.map((q) => searxSearch(q, 10).catch(() => [])),
-      );
-
-      const seen = new Set<string>();
-      const merged: typeof searchSources = [];
-      for (const arr of resultsArrays) {
-        for (const r of arr) {
-          if (!seen.has(r.url)) {
-            seen.add(r.url);
-            merged.push({ title: r.title, url: r.url });
-          }
+        // Full pipeline: plan angles -> search them all -> read the strongest
+        // pages in full -> build a cited context block. Progress steps are
+        // streamed to the UI as tool chips so the user sees the work happen.
+        const research = await runDeepResearch(text, {
+          model: selectedModel,
+          onStep: (s) => researchSteps.push(s),
+        });
+        if (research.context) {
+          searchSources = research.sources;
+          userContent = research.context + userContent;
         }
-      }
-
-      const allResults = resultsArrays.flat().filter((r, i, a) => {
-        const first = a.findIndex((x) => x.url === r.url);
-        return first === i;
-      }).slice(0, 20);
-
-      if (allResults.length > 0) {
-        searchSources = allResults.map((r) => ({ title: r.title, url: r.url, snippet: r.content }));
-        userContent = formatSearchContext(text, allResults) + userContent;
+      } else {
+        const results = await searxSearch(text, 10).catch(() => []);
+        if (results.length > 0) {
+          searchSources = results.map((r) => ({ title: r.title, url: r.url, snippet: r.content }));
+          userContent = formatSearchContext(text, results) + userContent;
+        }
       }
     } catch { /* non-fatal */ }
   }
@@ -224,6 +184,16 @@ export async function POST(req: NextRequest) {
   let fullResponse = '';
   const finalConvId = convId;
 
+  // Register this stream so engine switching never evicts a backend mid-generation
+  // (which would truncate this reply and save it as if complete).
+  trackChatStart();
+  let trackEnded = false;
+  const endTracking = () => {
+    if (trackEnded) return;
+    trackEnded = true;
+    trackChatEnd();
+  };
+
   const stream = new ReadableStream({
     async start(controller) {
       const send = (obj: Record<string, unknown>) =>
@@ -231,6 +201,7 @@ export async function POST(req: NextRequest) {
 
       send({ userMsgId });
       if (searchSources.length > 0) send({ sources: searchSources });
+      for (const s of researchSteps) send({ toolEvent: s });
 
       try {
         const deltaStream = useTools
@@ -248,21 +219,31 @@ export async function POST(req: NextRequest) {
               messages: chatMessages,
               system: systemPrompt,
               contextSize: ctxSize,
+              // Research briefings should be factual, not creative.
+              temperature: useDeepResearch ? 0.4 : undefined,
               signal: req.signal,
               onStats: (stats) => send({ stats }),
             });
 
         for await (const delta of deltaStream) {
           fullResponse += delta;
+          // Best-effort backpressure: if the client reads slower than the model
+          // produces, yield a tick before piling more into the queue.
+          if (controller.desiredSize !== null && controller.desiredSize <= 0) {
+            await new Promise<void>((r) => setImmediate(r));
+          }
           send({ delta });
         }
       } catch (err: unknown) {
         const isAbort = err instanceof Error && (err.name === 'AbortError' || err.message.includes('aborted'));
         if (!isAbort) {
-          const msg = err instanceof Error ? err.message : String(err);
-          send({ error: msg });
+          // The real error can contain internals — log it server-side, send a
+          // generic message to the browser.
+          logger.error('chat stream failed', { model: selectedModel.id, provider: selectedModel.provider, err: errText(err) });
+          send({ error: 'The model failed to respond. Please try again or switch models.' });
         }
       } finally {
+        endTracking();
         if (fullResponse) {
           const assistantMsgId = addMessage(finalConvId, 'assistant', fullResponse);
           send({ assistantMsgId });
@@ -275,6 +256,10 @@ export async function POST(req: NextRequest) {
         controller.enqueue(encoder.encode('data: [DONE]\n\n'));
         controller.close();
       }
+    },
+    cancel() {
+      // Client disconnected before consuming everything — release the slot.
+      endTracking();
     },
   });
 

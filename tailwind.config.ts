@@ -8,8 +8,12 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+        sans: ['Newsreader', 'Georgia', '"Times New Roman"', 'serif'],
         mono: ['"JetBrains Mono"', '"Fira Code"', 'ui-monospace', 'monospace'],
+        display: ['"Old Standard TT"', 'Georgia', 'serif'],
+        gothic: ['UnifrakturMaguntia', '"Old Standard TT"', 'serif'],
+        type: ['"Special Elite"', '"JetBrains Mono"', 'monospace'],
+        fell: ['"IM Fell English"', 'Georgia', 'serif'],
       },
       colors: {
         bg:    { DEFAULT: 'var(--bg)', 1: 'var(--bg-1)', 2: 'var(--bg-2)', 3: 'var(--bg-3)', 4: 'var(--bg-4)' },
@@ -18,6 +22,17 @@ const config: Config = {
         ok:    'var(--ok)',
         err:   'var(--err)',
         warn:  'var(--warn)',
+        // Terminal-flavored aliases used by the public share page.
+        term: {
+          bg:     'var(--bg)',
+          panel:  'var(--bg-2)',
+          text:   'var(--fg)',
+          dim:    'var(--fg-3)',
+          border: 'var(--bd-2)',
+          green:  'var(--g-text)',
+          amber:  'var(--warn)',
+          cyan:   'var(--cyan)',
+        },
       },
       borderColor: {
         DEFAULT: 'var(--bd)',

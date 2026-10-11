@@ -13,7 +13,7 @@
  */
 import { promises as fs } from 'node:fs';
 import { discoverOllamaModels, discoverLmStudioModels, OLLAMA_BASE_URL, LMSTUDIO_BASE_URL } from './models';
-import { liveProps, readRuntimeEnv, resolveModelPath } from './local-llama';
+import { liveProps, readRuntimeEnv, resolveModelPath, waitForHealthy } from './local-llama';
 import { llamaSupervisor } from './llama-supervisor';
 import { detectHardware } from './hardware';
 import { maxContextForModel } from './hwfit';
@@ -173,9 +173,24 @@ export async function unloadAllOllama(): Promise<number> {
   } catch { return 0; }
 }
 
+// ─── In-flight chat tracking ──────────────────────────────────────────────────
+// Evicting an engine while it is mid-generation kills that user's stream and
+// saves a truncated reply as if it were complete. Chat routes register active
+// streams here so eviction defers until nothing is in flight.
+let inflightChats = 0;
+export function chatInflightCount(): number { return inflightChats; }
+export function trackChatStart(): void { inflightChats++; }
+export function trackChatEnd(): void { inflightChats = Math.max(0, inflightChats - 1); }
+
 /** Free every local engine except `target`. Returns human labels of what we freed. */
 export async function freeEnginesExcept(target: EngineId | null): Promise<string[]> {
   const freed: string[] = [];
+  if (inflightChats > 0) {
+    // A chat is streaming right now — never pull an engine out from under it.
+    // The new engine loads alongside instead; if the GPU can't hold both, the
+    // new request fails visibly rather than corrupting the in-flight one.
+    return freed;
+  }
   if (target !== 'llama') {
     const st = llamaSupervisor.status();
     if (st.running && st.managing) { await llamaSupervisor.stop(); freed.push('llama.cpp'); }
@@ -204,6 +219,10 @@ export async function ensureLlamaActive(): Promise<void> {
     } catch { /* fall back to saved/default ctx */ }
   }
   await llamaSupervisor.restart({ model: modelPath ?? undefined, ctx });
+  // restart() returns when the process spawns, not when the model is loaded —
+  // large GGUFs take tens of seconds and answer 503 until then. Wait for real
+  // health so the chat request that triggered this doesn't hit a dead server.
+  await waitForHealthy();
 }
 
 function activeEngineStore(): typeof globalThis & { __chakorActiveEngine?: EngineId | null } {

@@ -165,12 +165,18 @@ export async function readRuntimeEnv(): Promise<RuntimeConfig> {
 /** Persist the desired launch config. The wrapper reads this on next start. */
 export async function writeRuntimeEnv(cfg: Required<Pick<RuntimeConfig, 'model' | 'ctx'>> & RuntimeConfig): Promise<void> {
   const alias = cfg.alias ?? process.env.LLAMA_MODEL ?? process.env.CHAKOR_MODEL_ALIAS ?? 'Chakor';
+  // Values land inside double quotes in a bash-sourced env file, so neutralize
+  // the characters that are special there (quote breakout, $/` expansion).
+  const esc = (v: string): string => {
+    if (/[\r\n]/.test(v)) throw new Error('runtime env values may not contain newlines');
+    return v.replace(/[\\"$`]/g, (c) => '\\' + c);
+  };
   const lines = [
     '# Written by Chakor. Controls the local llama.cpp launch (see scripts/llama-launch.sh).',
-    `LLAMA_GGUF="${cfg.model}"`,
+    `LLAMA_GGUF="${esc(cfg.model)}"`,
     `LLAMA_CTX="${Math.round(cfg.ctx)}"`,
-    `LLAMA_ALIAS="${alias}"`,
-    `LLAMA_MMPROJ="${cfg.mmproj ?? ''}"`,
+    `LLAMA_ALIAS="${esc(alias)}"`,
+    `LLAMA_MMPROJ="${esc(cfg.mmproj ?? '')}"`,
     '',
   ];
   await fs.mkdir(path.dirname(RUNTIME_ENV), { recursive: true });
@@ -207,7 +213,10 @@ export function buildLlamaArgs(opts: { model: string; ctx: number; alias?: strin
     '--model', opts.model,
     '--alias', alias,
     '--port', String(llamaPort()),
-    '--host', process.env.LLAMA_HOST ?? '0.0.0.0',
+    // Loopback by default: only the Chakor process on this machine should reach
+    // the inference server — it has no auth of its own. Set LLAMA_HOST=0.0.0.0
+    // explicitly if you really want to serve the raw model to the LAN.
+    '--host', process.env.LLAMA_HOST ?? '127.0.0.1',
     '--ctx-size', String(Math.round(opts.ctx)),
     '--n-gpu-layers', process.env.LLAMA_NGL ?? '9999',
     '--threads', process.env.LLAMA_THREADS ?? '8',

@@ -124,8 +124,15 @@ class LlamaSupervisor {
 
       child.stdout?.on('data', (d) => process.stdout.write(`[llama] ${d}`));
       child.stderr?.on('data', (d) => process.stderr.write(`[llama] ${d}`));
-      child.on('spawn', () => { this.restarts++; this.backoff = 1000; });
-      child.on('error', (e) => { this.lastError = e.message; });
+      child.on('spawn', () => { this.restarts++; });
+      child.on('error', (e) => {
+        // Spawn failure (binary missing, not executable). No 'exit' event follows
+        // a failed spawn, so without this the supervisor would keep reporting
+        // running:true forever. Treat it like an instant crash.
+        this.child = null;
+        this.fastCrashes++;
+        this.handleUnexpectedDeath(`llama-server failed to start (${e.message})`);
+      });
       child.on('exit', (code, signal) => {
         this.child = null;
         if (this.intentionalStop) { this.intentionalStop = false; return; }
@@ -133,24 +140,16 @@ class LlamaSupervisor {
         const uptime = Date.now() - this.lastSpawnAt;
         // Crashed almost immediately = it never got healthy. That's the OOM /
         // too-big-model signature. Count consecutive fast crashes; a launch that
-        // actually ran for a while resets the counter (a one-off, worth retrying).
-        this.fastCrashes = uptime < LlamaSupervisor.FAST_CRASH_MS ? this.fastCrashes + 1 : 0;
-
-        if (this.fastCrashes >= this.maxFastCrashes) {
-          // Stop the runaway loop and say something the user can act on.
-          this.crashed = true;
-          const name = this.model ? this.model.split('/').pop() : 'the model';
-          this.lastError =
-            `llama-server crashed ${this.fastCrashes} times in a row. ${name} is probably too large ` +
-            `for this machine's memory. Pick a smaller model in Settings, or switch to Ollama or LM Studio.`;
-          return;
+        // actually ran for a while resets the counter AND the backoff (a one-off,
+        // worth retrying quickly).
+        if (uptime < LlamaSupervisor.FAST_CRASH_MS) {
+          this.fastCrashes++;
+        } else {
+          this.fastCrashes = 0;
+          this.backoff = 1000;
         }
 
-        // Otherwise back off and relaunch, like systemd Restart=always did.
-        this.lastError = `llama-server exited (code=${code ?? '?'} signal=${signal ?? '-'})`;
-        const wait = this.backoff;
-        this.backoff = Math.min(this.backoff * 2, 30_000);
-        setTimeout(() => { if (this.enabled && this.owns && !this.crashed && !this.child) void this.launch(); }, wait);
+        this.handleUnexpectedDeath(`llama-server exited (code=${code ?? '?'} signal=${signal ?? '-'})`);
       });
     } catch (e) {
       this.lastError = e instanceof Error ? e.message : String(e);
@@ -158,6 +157,26 @@ class LlamaSupervisor {
     } finally {
       this.starting = false;
     }
+  }
+
+  /** Crash accounting shared by the exit and spawn-error paths. */
+  private handleUnexpectedDeath(detail: string): void {
+    if (this.fastCrashes >= this.maxFastCrashes) {
+      // Stop the runaway loop and say something the user can act on.
+      this.crashed = true;
+      const name = this.model ? this.model.split('/').pop() : 'the model';
+      this.lastError =
+        `llama-server crashed ${this.fastCrashes} times in a row. ${name} is probably too large ` +
+        `for this machine's memory. Pick a smaller model in Settings, or switch to Ollama or LM Studio. ` +
+        `(last error: ${detail})`;
+      return;
+    }
+
+    // Otherwise back off and relaunch, like systemd Restart=always did.
+    this.lastError = detail;
+    const wait = this.backoff;
+    this.backoff = Math.min(this.backoff * 2, 30_000);
+    setTimeout(() => { if (this.enabled && this.owns && !this.crashed && !this.child) void this.launch(); }, wait);
   }
 
   private async stopChild(): Promise<void> {
@@ -173,8 +192,18 @@ class LlamaSupervisor {
     this.child = null;
   }
 
-  /** Switch model/context (or cold-start). Writes the choice and relaunches. */
-  async restart(cfg?: SwitchConfig): Promise<{ ok: boolean; error?: string }> {
+  /** Switch model/context (or cold-start). Writes the choice and relaunches.
+   *  Serialized: a second switch while one is in flight waits its turn instead
+   *  of racing stop/launch and reporting a spurious failure. */
+  private restartChain: Promise<unknown> = Promise.resolve();
+
+  restart(cfg?: SwitchConfig): Promise<{ ok: boolean; error?: string }> {
+    const run = this.restartChain.then(() => this.doRestart(cfg));
+    this.restartChain = run.catch(() => { /* keep the chain alive */ });
+    return run;
+  }
+
+  private async doRestart(cfg?: SwitchConfig): Promise<{ ok: boolean; error?: string }> {
     if (!this.enabled) return { ok: false, error: 'Local model supervision is turned off.' };
     // An explicit switch is a fresh start: clear the gave-up state and the crash
     // counter so a newly chosen (smaller) model gets a clean chance to launch.
@@ -190,6 +219,17 @@ class LlamaSupervisor {
       }
     }
     await this.stopChild();
+    // If something we didn't launch is still serving this port (e.g. an external
+    // llama-server adopted at boot), spawning would collide on the port and the
+    // instant exit would be misreported as a too-big-model crash loop.
+    if (!this.child && (await this.healthy())) {
+      return {
+        ok: false,
+        error:
+          'Another llama-server we did not launch is already serving this port. ' +
+          'Stop it first, or set CHAKOR_SUPERVISE_LLAMA=false to use it as-is.',
+      };
+    }
     await this.launch();
     return this.child ? { ok: true } : { ok: false, error: this.lastError ?? 'Failed to start llama-server.' };
   }

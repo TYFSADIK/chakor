@@ -21,6 +21,8 @@ export default auth((req: NextRequest & { auth: unknown }) => {
     pathname.startsWith('/share') ||
     pathname.startsWith('/api/auth') ||
     pathname.startsWith('/api/register') ||
+    // Liveness/readiness probe for uptime monitors and the Docker HEALTHCHECK.
+    pathname.startsWith('/api/health') ||
     // The OpenAI-compatible API authenticates with a Bearer key, not a session.
     pathname.startsWith('/v1/') ||
     pathname.startsWith('/favicon');

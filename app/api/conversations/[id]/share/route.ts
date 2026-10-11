@@ -14,7 +14,8 @@ export async function POST(_req: NextRequest, { params }: Params) {
   const conv = getConversation(id, userId);
   if (!conv) return NextResponse.json({ error: 'not found' }, { status: 404 });
 
-  const slug = randomBytes(5).toString('hex'); // 10-char hex slug
+  // 128-bit slug: shared links are public by design, so they must be unguessable.
+  const slug = randomBytes(16).toString('hex');
   setShareSlug(id, slug);
 
   return NextResponse.json({ slug });

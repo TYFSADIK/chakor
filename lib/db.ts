@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'node:path';
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 
 const DB_PATH = process.env.CHAKOR_DB_PATH || './data/chakor.db';
 
@@ -51,6 +52,8 @@ export function db(): Database.Database {
     );
 
     CREATE INDEX IF NOT EXISTS idx_msg_conv ON messages(conversation_id, created_at);
+    -- Supports the global time-range scan in dailyMessageStats().
+    CREATE INDEX IF NOT EXISTS idx_msg_created ON messages(created_at);
 
     -- v2: RAG tables (created now, unused until v2)
     CREATE TABLE IF NOT EXISTS documents (
@@ -61,6 +64,8 @@ export function db(): Database.Database {
       size_bytes  INTEGER,
       created_at  INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
     );
+
+    CREATE INDEX IF NOT EXISTS idx_documents_user ON documents(user_id);
 
     CREATE TABLE IF NOT EXISTS chunks (
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -148,7 +153,8 @@ export function db(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id, pinned DESC, updated_at DESC);
   `);
 
-  // Idempotent migrations — ALTER TABLE silently fails if column exists
+  // Idempotent migrations — ALTER TABLE fails with 'duplicate column name' if
+  // the column exists; only that expected error is swallowed.
   const migrations = [
     `ALTER TABLE conversations ADD COLUMN share_slug TEXT`,
     `ALTER TABLE users ADD COLUMN display_name TEXT`,
@@ -159,13 +165,29 @@ export function db(): Database.Database {
     `ALTER TABLE conversations ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE conversations ADD COLUMN archived INTEGER NOT NULL DEFAULT 0`,
     `ALTER TABLE conversations ADD COLUMN tags TEXT`,
+    // Last 4 chars of the raw API token, kept for masked display (the token
+    // column itself only holds the sha256 hash).
+    `ALTER TABLE api_keys ADD COLUMN token_tail TEXT`,
   ];
   for (const sql of migrations) {
-    try { _db.exec(sql); } catch { /* column already exists */ }
+    try {
+      _db.exec(sql);
+    } catch (e) {
+      if (!(e instanceof Error && e.message.includes('duplicate column name'))) throw e;
+    }
   }
-  try {
-    _db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_share ON conversations(share_slug) WHERE share_slug IS NOT NULL`);
-  } catch { /* index already exists */ }
+  _db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_conv_share ON conversations(share_slug) WHERE share_slug IS NOT NULL`);
+  _db.exec(`CREATE INDEX IF NOT EXISTS idx_conv_folder ON conversations(folder_id)`);
+
+  // One-time migration: hash plaintext API tokens at rest. Plaintext tokens
+  // are the raw "sk-chakor-…" strings; hashed ones are 64-char hex sha256.
+  const HEX64 = /^[0-9a-f]{64}$/;
+  const keyRows = _db.prepare('SELECT id, token FROM api_keys').all() as Array<{ id: number; token: string }>;
+  for (const k of keyRows) {
+    if (HEX64.test(k.token)) continue;
+    _db.prepare('UPDATE api_keys SET token = ?, token_tail = ? WHERE id = ?')
+      .run(hashApiToken(k.token), k.token.slice(-4), k.id);
+  }
 
   return _db;
 }
@@ -189,11 +211,17 @@ export function getUserById(id: number): User | undefined {
 }
 
 export function createUser(username: string, passwordHash: string, email?: string): number {
-  const isFirstUser = (db().prepare('SELECT COUNT(*) AS c FROM users').get() as { c: number }).c === 0;
-  const result = db()
-    .prepare('INSERT INTO users (username, email, password_hash, is_admin) VALUES (?, ?, ?, ?)')
-    .run(username, email ?? null, passwordHash, isFirstUser ? 1 : 0);
-  return Number(result.lastInsertRowid);
+  // COUNT + INSERT must be atomic: two concurrent first registrations would
+  // otherwise both see an empty table and both become admin. better-sqlite3 is
+  // synchronous, so a transaction closes the race within the process.
+  const tx = db().transaction(() => {
+    const isFirstUser = (db().prepare('SELECT COUNT(*) AS c FROM users').get() as { c: number }).c === 0;
+    const result = db()
+      .prepare('INSERT INTO users (username, email, password_hash, is_admin) VALUES (?, ?, ?, ?)')
+      .run(username, email ?? null, passwordHash, isFirstUser ? 1 : 0);
+    return Number(result.lastInsertRowid);
+  });
+  return tx();
 }
 
 // ─── Conversations ─────────────────────────────────────────────────
@@ -237,6 +265,21 @@ export function createConversation(id: string, userId: number, model: string, ti
   db()
     .prepare('INSERT INTO conversations (id, user_id, model, title) VALUES (?, ?, ?, ?)')
     .run(id, userId, model, title);
+}
+
+/** Atomically create a conversation with all its messages (used by JSON import). */
+export function importConversation(
+  id: string,
+  userId: number,
+  model: string,
+  title: string,
+  messages: Array<{ role: 'user' | 'assistant'; content: string }>,
+): void {
+  const tx = db().transaction(() => {
+    createConversation(id, userId, model, title);
+    for (const m of messages) addMessage(id, m.role, m.content);
+  });
+  tx();
 }
 
 export function updateConversationTitle(id: string, userId: number, title: string): void {
@@ -321,10 +364,17 @@ function parseImages(raw: unknown): string[] | undefined {
   }
 }
 
-export function listMessages(conversationId: string): Message[] {
-  const rows = db()
-    .prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC, id ASC')
-    .all(conversationId) as Array<Message & { images?: unknown }>;
+// With a limit, returns the NEWEST `limit` messages (still ascending order).
+export function listMessages(conversationId: string, limit?: number): Message[] {
+  const rows = (limit
+    ? db().prepare(`
+        SELECT * FROM (
+          SELECT * FROM messages WHERE conversation_id = ?
+          ORDER BY created_at DESC, id DESC LIMIT ?
+        ) ORDER BY created_at ASC, id ASC
+      `).all(conversationId, limit)
+    : db().prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC, id ASC').all(conversationId)
+  ) as Array<Message & { images?: unknown }>;
   return rows.map((r) => ({ ...r, images: parseImages(r.images) }));
 }
 
@@ -401,12 +451,16 @@ export function addChunks(documentId: number, chunks: string[]): void {
   insert(chunks);
 }
 
+// Corpus is capped at the newest 2000 chunks so the per-message BM25 pass in
+// lib/rag.ts (which re-tokenizes the whole corpus) stays bounded.
 export function getChunksForUser(userId: number): Array<Chunk & { filename: string }> {
   return db().prepare(`
     SELECT c.id, c.document_id, c.chunk_idx, c.content, d.filename
     FROM chunks c
     JOIN documents d ON d.id = c.document_id
     WHERE d.user_id = ?
+    ORDER BY c.id DESC
+    LIMIT 2000
   `).all(userId) as Array<Chunk & { filename: string }>;
 }
 
@@ -436,14 +490,22 @@ export interface ApiKey {
   user_id: number;
   name: string;
   token: string;
+  token_tail: string | null;
   created_at: number;
   last_used: number | null;
 }
 
+/** sha256 hex of a raw API token — the only form stored at rest. */
+export function hashApiToken(token: string): string {
+  return createHash('sha256').update(token).digest('hex');
+}
+
+// Stores the hash of `token` plus its last 4 chars (for masked display); the
+// raw token is only ever returned to the user once, by the keys route.
 export function createApiKey(userId: number, name: string, token: string): ApiKey {
   const result = db()
-    .prepare('INSERT INTO api_keys (user_id, name, token) VALUES (?, ?, ?)')
-    .run(userId, name, token);
+    .prepare('INSERT INTO api_keys (user_id, name, token, token_tail) VALUES (?, ?, ?, ?)')
+    .run(userId, name, hashApiToken(token), token.slice(-4));
   return db().prepare('SELECT * FROM api_keys WHERE id = ?').get(Number(result.lastInsertRowid)) as ApiKey;
 }
 
@@ -457,9 +519,9 @@ export function deleteApiKey(id: number, userId: number): void {
   db().prepare('DELETE FROM api_keys WHERE id = ? AND user_id = ?').run(id, userId);
 }
 
-/** Look up a key by its raw token. Used to authenticate API requests. */
+/** Look up a key by its raw token (hashed before comparison). Used to authenticate API requests. */
 export function getApiKeyByToken(token: string): ApiKey | undefined {
-  return db().prepare('SELECT * FROM api_keys WHERE token = ?').get(token) as ApiKey | undefined;
+  return db().prepare('SELECT * FROM api_keys WHERE token = ?').get(hashApiToken(token)) as ApiKey | undefined;
 }
 
 export function touchApiKey(id: number): void {

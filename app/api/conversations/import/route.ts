@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { randomUUID } from 'node:crypto';
 import { auth } from '@/lib/auth';
-import { createConversation, addMessage, getConversation } from '@/lib/db';
+import { importConversation, getConversation } from '@/lib/db';
 import { defaultModel } from '@/lib/models';
 
 /**
@@ -28,10 +28,13 @@ export async function POST(req: NextRequest) {
 
   const title = String(body?.title ?? 'Imported conversation').trim().slice(0, 100) || 'Imported conversation';
   const convId = randomUUID();
-  createConversation(convId, userId, defaultModel().id, title);
-  for (const m of messages) {
-    addMessage(convId, m.role as 'user' | 'assistant', m.content.slice(0, 100000));
-  }
+  importConversation(
+    convId,
+    userId,
+    defaultModel().id,
+    title,
+    messages.map((m: { role: string; content: string }) => ({ role: m.role as 'user' | 'assistant', content: m.content.slice(0, 100000) })),
+  );
 
   return NextResponse.json(getConversation(convId, userId));
 }

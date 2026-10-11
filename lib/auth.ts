@@ -2,6 +2,11 @@ import NextAuth from 'next-auth';
 import Credentials from 'next-auth/providers/credentials';
 import bcrypt from 'bcryptjs';
 import { getUserByUsername, getUserById } from './db';
+import { rateLimit } from './ratelimit';
+
+// Constant hash compared against when the user does not exist, so both paths
+// cost one bcrypt.compare and valid usernames are not revealed by timing (S3).
+const DUMMY_HASH = '$2a$12$AwzvigHLnh/EbBake7qEVuTJdL3oz3zlhTfo6wknzi2bjDO.C0LJq';
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
   trustHost: true,
@@ -20,11 +25,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         const password = String(credentials?.password ?? '');
         if (!username || !password) return null;
 
-        const user = getUserByUsername(username);
-        if (!user) return null;
+        // Throttle credential stuffing per username before any bcrypt work.
+        if (!rateLimit(`login:${username}`, 10, 5 * 60 * 1000)) return null;
 
-        const ok = await bcrypt.compare(password, user.password_hash);
-        if (!ok) return null;
+        const user = getUserByUsername(username);
+        // Always run one compare — against the dummy hash when the user is
+        // missing — so both paths take the same time.
+        const ok = await bcrypt.compare(password, user?.password_hash ?? DUMMY_HASH);
+        if (!user || !ok) return null;
 
         return {
           id: String(user.id),
@@ -41,12 +49,21 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     },
     async session({ session, token }) {
       if (token.uid && session.user) {
-        (session.user as unknown as { id?: number }).id = token.uid as number;
         // refresh admin flag from DB on each session read
         const u = getUserById(token.uid as number);
+        const su = session.user as unknown as { id?: number; isAdmin?: boolean };
         if (u) {
-          (session.user as unknown as { isAdmin?: boolean }).isAdmin = u.is_admin === 1;
+          su.id = token.uid as number;
+          su.isAdmin = u.is_admin === 1;
           session.user.name = (u as unknown as { display_name?: string }).display_name ?? u.username;
+        } else {
+          // User was deleted after the JWT was issued: strip identifying fields
+          // so downstream ownership/admin checks fail instead of letting the
+          // ghost session act until token expiry. (Middleware's JWT-presence
+          // check still passes until expiry — that is a residual limitation.)
+          delete su.id;
+          delete su.isAdmin;
+          session.user.name = null;
         }
       }
       return session;

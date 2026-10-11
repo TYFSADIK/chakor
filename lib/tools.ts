@@ -1,4 +1,5 @@
 import { searxSearch } from './searxng';
+import { fetchPageText } from './safe-fetch';
 import { createMemory } from './db';
 import { randomUUID } from 'node:crypto';
 
@@ -9,7 +10,8 @@ import { randomUUID } from 'node:crypto';
  * result back so the model can answer with real data.
  *
  * Keep these small and side-effect-light. They run with the server's network
- * access, so treat anything the model passes in as untrusted.
+ * access, so treat anything the model passes in as untrusted. URL fetching
+ * goes through lib/safe-fetch.ts, which enforces the SSRF blocklist.
  */
 /** Per-request context handed to tools that need to know who is asking. */
 export interface ToolContext { userId?: number }
@@ -19,32 +21,6 @@ export interface ToolSpec {
   description: string;
   parameters: Record<string, unknown>;
   run: (args: Record<string, unknown>, ctx?: ToolContext) => Promise<string>;
-}
-
-// Block obvious internal targets so a model cannot use fetch_url to poke at the
-// host's own network. Set TOOLS_ALLOW_PRIVATE=true to turn this off.
-function isBlockedHost(hostname: string): boolean {
-  if (process.env.TOOLS_ALLOW_PRIVATE === 'true') return false;
-  const h = hostname.toLowerCase();
-  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.internal')) return true;
-  if (h === '0.0.0.0' || h === '::1' || h === '[::1]') return true;
-  if (/^127\./.test(h) || /^10\./.test(h) || /^192\.168\./.test(h)) return true;
-  if (/^172\.(1[6-9]|2\d|3[01])\./.test(h)) return true;
-  if (/^169\.254\./.test(h)) return true;
-  return false;
-}
-
-function stripHtml(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/\s+/g, ' ')
-    .trim();
 }
 
 export const TOOLS: Record<string, ToolSpec> = {
@@ -75,27 +51,7 @@ export const TOOLS: Record<string, ToolSpec> = {
       properties: { url: { type: 'string', description: 'The full http(s) URL to fetch' } },
       required: ['url'],
     },
-    run: async (args) => {
-      const raw = String(args.url ?? '').trim();
-      let u: URL;
-      try { u = new URL(raw); } catch { return 'Invalid URL.'; }
-      if (u.protocol !== 'http:' && u.protocol !== 'https:') return 'Only http and https URLs are allowed.';
-      if (isBlockedHost(u.hostname)) return 'That host is not allowed.';
-      try {
-        const res = await fetch(u.toString(), {
-          headers: { 'User-Agent': 'ChakorBot/1.0' },
-          signal: AbortSignal.timeout(12_000),
-          redirect: 'follow',
-        });
-        if (!res.ok) return `Fetch failed: HTTP ${res.status}`;
-        const ctype = res.headers.get('content-type') ?? '';
-        const body = await res.text();
-        const text = ctype.includes('html') ? stripHtml(body) : body;
-        return text.slice(0, 6000) || '(empty page)';
-      } catch (e) {
-        return `Could not fetch the page: ${e instanceof Error ? e.message : 'error'}`;
-      }
-    },
+    run: async (args) => fetchPageText(String(args.url ?? ''), 6000),
   },
 
   calculator: {
@@ -114,7 +70,7 @@ export const TOOLS: Record<string, ToolSpec> = {
         return 'Only basic arithmetic is supported.';
       }
       try {
-        // eslint-disable-next-line no-new-func
+        // The charset guard above is what keeps Function() from running code.
         const val = Function(`"use strict"; return (${expr});`)();
         if (typeof val !== 'number' || !isFinite(val)) return 'Could not evaluate that expression.';
         return String(val);

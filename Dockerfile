@@ -19,20 +19,25 @@ COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN npm run build
 
-# ---- run: small runtime image ----
+# ---- run: small runtime image (non-root) ----
 FROM node:20-slim AS run
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
-    CHAKOR_DB_PATH=/data/chakor.db
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/.next ./.next
-COPY --from=build /app/public ./public
-COPY --from=build /app/package.json ./package.json
-COPY --from=build /app/next.config.mjs ./next.config.mjs
-COPY --from=build /app/scripts ./scripts
-COPY docker-entrypoint.sh ./docker-entrypoint.sh
-RUN mkdir -p /data && chmod +x docker-entrypoint.sh
+    CHAKOR_DB_PATH=/data/chakor.db \
+    CHAKOR_MODELS_DIR=/data/models
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/.next ./.next
+COPY --from=build --chown=node:node /app/public ./public
+COPY --from=build --chown=node:node /app/package.json ./package.json
+COPY --from=build --chown=node:node /app/next.config.mjs ./next.config.mjs
+COPY --from=build --chown=node:node /app/scripts ./scripts
+COPY --chown=node:node docker-entrypoint.sh ./docker-entrypoint.sh
+RUN mkdir -p /data/models && chown -R node:node /data && chmod +x docker-entrypoint.sh
+USER node
 EXPOSE 3001
 VOLUME ["/data"]
+# node:20-slim has no wget/curl, so use the runtime's own fetch.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3001/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 ENTRYPOINT ["./docker-entrypoint.sh"]

@@ -11,9 +11,12 @@ export const metadata: Metadata = {
 };
 
 export default function RegisterPage() {
+  // The invite field is only shown when the server will actually require it;
+  // enforcement happens in app/api/register/route.ts regardless.
+  const inviteRequired = (process.env.REGISTRATION_MODE || 'closed') === 'invite';
   return (
     <main>
-      <RegisterForm />
+      <RegisterForm inviteRequired={inviteRequired} />
     </main>
   );
 }

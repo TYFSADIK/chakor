@@ -1,6 +1,8 @@
 import type { ChatMessage, LlamaStats } from './llama';
 import { type ModelConfig, OLLAMA_BASE_URL, LMSTUDIO_BASE_URL, llamaEndpoint } from './models';
 import { TOOLS, toolDefs } from './tools';
+import { trimToContext } from './dispatch';
+import { logger, errText } from './logger';
 
 /**
  * The tool-calling loop. For models that speak the OpenAI function-calling
@@ -12,6 +14,9 @@ import { TOOLS, toolDefs } from './tools';
  */
 
 const MAX_ROUNDS = 5;
+// Non-streaming rounds get a TOTAL timeout (unlike streams, which use an idle
+// watchdog) — a wedged backend must not hang the whole loop forever.
+const ROUND_TIMEOUT_MS = 120_000;
 
 export interface ToolEvent { name: string; args: string; result: string }
 
@@ -30,8 +35,7 @@ export function supportsTools(model: ModelConfig): boolean {
   return ['openai', 'openrouter', 'ollama', 'lmstudio', 'llama'].includes(model.provider);
 }
 
-function endpointFor(model: ModelConfig): { url: string; headers: Record<string, string>; model: string } | null {
-  switch (model.provider) {
+function endpointFor(model: ModelConfig): { url: string; headers: Record<string, string>; model: string } | null {  switch (model.provider) {
     case 'openai': {
       const key = process.env.OPENAI_API_KEY;
       if (!key) throw new Error('OPENAI_API_KEY not configured');
@@ -64,6 +68,9 @@ function endpointFor(model: ModelConfig): { url: string; headers: Record<string,
   }
 }
 
+/** Resolve the OpenAI-compatible endpoint for a model. Exported for the research planner. */
+export const agentEndpoint = endpointFor;
+
 interface ToolCall { id: string; function: { name: string; arguments: string } }
 
 export async function* runAgent(opts: AgentOptions): AsyncGenerator<string> {
@@ -72,7 +79,9 @@ export async function* runAgent(opts: AgentOptions): AsyncGenerator<string> {
   const tools = toolDefs(opts.toolIds);
 
   // Mutable working copy of the conversation we extend with tool results.
-  const msgs: Record<string, unknown>[] = opts.messages.map((m) => ({ role: m.role, content: m.content }));
+  // Trimmed to the model's window first so a long chat never overflows round 0.
+  const msgs: Record<string, unknown>[] = trimToContext(opts.messages, opts.model.contextWindow)
+    .map((m) => ({ role: m.role, content: m.content }));
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     // On the last allowed round, drop tools so the model is forced to answer.
@@ -81,17 +90,25 @@ export async function* runAgent(opts: AgentOptions): AsyncGenerator<string> {
     const res = await fetch(cfg.url, {
       method: 'POST',
       headers: cfg.headers,
-      signal: opts.signal,
+      // Total timeout per round, combined with the caller's signal so client
+      // aborts still propagate.
+      signal: opts.signal
+        ? AbortSignal.any([opts.signal, AbortSignal.timeout(ROUND_TIMEOUT_MS)])
+        : AbortSignal.timeout(ROUND_TIMEOUT_MS),
       body: JSON.stringify({
         model: cfg.model,
         messages: msgs,
         stream: false,
         ...(offerTools ? { tools, tool_choice: 'auto' } : {}),
       }),
+    }).catch((e) => {
+      logger.warn('agent round request failed', { provider: opts.model.provider, round, err: errText(e) });
+      throw e;
     });
 
     if (!res.ok) {
       const t = await res.text().catch(() => '');
+      logger.warn('agent round HTTP error', { provider: opts.model.provider, round, status: res.status });
       throw new Error(`${opts.model.provider} ${res.status}: ${t.slice(0, 300)}`);
     }
 

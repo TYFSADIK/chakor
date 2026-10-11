@@ -18,79 +18,92 @@ export default async function SharePage({ params }: Params) {
     (m) => m.role === 'user' || m.role === 'assistant',
   );
 
+  const dateline = new Date(conv.created_at * 1000).toLocaleDateString('en-US', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+  });
+
   return (
-    <div className="min-h-screen bg-term-bg text-term-text font-mono">
-      <header className="border-b border-term-border px-6 py-3 flex items-center gap-4">
-        <span className="font-display text-term-green tracking-widest text-lg">CHAKOR</span>
-        <span className="text-term-dim text-xs flex-1">// shared conversation</span>
-        <Link href="/" className="text-term-dim text-xs hover:text-term-green transition-colors">
-          start your own ↗
-        </Link>
+    <div className="min-h-screen" style={{ background: 'var(--bg)', color: 'var(--fg)' }}>
+      {/* Masthead */}
+      <header style={{ maxWidth: 760, margin: '0 auto', padding: '34px 20px 0', textAlign: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, paddingBottom: 10 }}>
+          <span className="byline">Public edition</span>
+          <span className="byline">{dateline}</span>
+        </div>
+        <hr className="rule-thin" />
+        <h1 className="masthead-name" style={{ fontSize: 'clamp(38px, 8vw, 60px)', padding: '14px 0 10px' }}>
+          {APP.name}
+        </h1>
+        <hr className="rule-double" />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, padding: '8px 0' }}>
+          <span className="kicker">Shared conversation</span>
+          <Link href="/" className="byline" style={{ color: 'var(--cyan)', textDecoration: 'none' }}>
+            Start your own ↗
+          </Link>
+        </div>
+        <hr className="rule-fat" />
       </header>
 
-      <div className="max-w-3xl mx-auto px-4 py-6">
-        <h1 className="text-term-text text-sm font-mono mb-6 border-b border-term-border pb-3">
+      {/* Article */}
+      <main style={{ maxWidth: 680, margin: '0 auto', padding: '26px 20px 70px' }}>
+        <h2 className="headline" style={{ fontSize: 'clamp(24px, 5vw, 34px)', marginBottom: 8 }}>
           {conv.title}
-        </h1>
+        </h2>
+        <p className="byline" style={{ marginBottom: 22 }}>
+          Transcript · {messages.length} {messages.length === 1 ? 'entry' : 'entries'}
+          {APP.creator ? ` · Printed by ${APP.creator}` : ''}
+        </p>
 
-        <div className="space-y-4">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
           {messages.map((msg) => (
-            <div
-              key={msg.id}
-              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-            >
-              {msg.role === 'assistant' && (
-                <div className="text-term-green text-xs mr-2 mt-0.5 shrink-0 select-none">▎</div>
-              )}
-              <div
-                className={`max-w-[80%] text-sm leading-relaxed font-mono ${
-                  msg.role === 'user'
-                    ? 'bg-term-panel border border-term-border px-4 py-2 text-term-text'
-                    : 'text-term-text prose-chakor'
-                }`}
-              >
-                {msg.role === 'user' ? (
-                  <div className="whitespace-pre-wrap">{msg.content}</div>
-                ) : (
+            msg.role === 'user' ? (
+              /* Reader's letter: an inset card on darker stock. */
+              <div key={msg.id} style={{ background: 'var(--bg-1)', border: '1px solid var(--bd-2)', borderLeft: '3px solid var(--fg)', padding: '13px 16px' }}>
+                <p className="kicker" style={{ marginBottom: 6, fontSize: 10 }}>The Reader writes</p>
+                <div style={{ whiteSpace: 'pre-wrap', fontSize: 14.5, lineHeight: 1.65, color: 'var(--fg-2)', wordBreak: 'break-word' }}>
+                  {msg.content}
+                </div>
+              </div>
+            ) : (
+              /* The paper answers: running article copy. */
+              <div key={msg.id}>
+                <p className="kicker" style={{ marginBottom: 8, fontSize: 10 }}>{APP.name} replies</p>
+                <div className="prose-ai" style={{ fontSize: 15.5 }}>
                   <ReactMarkdown
                     remarkPlugins={[remarkGfm]}
                     components={{
                       pre: ({ children }) => (
-                        <pre className="overflow-x-auto bg-term-panel border border-term-border/40 p-3 my-2 text-xs leading-relaxed">{children}</pre>
+                        <pre className="no-scroll" style={{ overflowX: 'auto', background: 'var(--bg-2)', border: '1px solid var(--bd-2)', padding: '12px 14px', margin: '12px 0', fontSize: 12.5, lineHeight: 1.6, fontFamily: "'JetBrains Mono', monospace", whiteSpace: 'pre', color: 'var(--fg)' }}>{children}</pre>
                       ),
                       code: ({ className, children, ...props }) => {
                         const isBlock = !!(className && /language-/.test(className));
                         if (isBlock) return <code className={className} {...props}>{children}</code>;
-                        return <code className="bg-term-panel text-term-amber px-1 py-0.5 text-xs" {...props}>{children}</code>;
+                        return <code style={{ background: 'var(--bg-2)', border: '1px solid var(--bd-2)', padding: '1px 5px', fontSize: '0.85em', fontFamily: "'JetBrains Mono', monospace", color: 'var(--g-text)' }} {...props}>{children}</code>;
                       },
-                      a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-term-cyan underline hover:opacity-80">{children}</a>,
-                      p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
-                      ul: ({ children }) => <ul className="list-disc list-inside mb-3 space-y-1">{children}</ul>,
-                      ol: ({ children }) => <ol className="list-decimal list-inside mb-3 space-y-1">{children}</ol>,
-                      h1: ({ children }) => <h1 className="text-term-green font-bold text-lg mb-2 mt-4">{children}</h1>,
-                      h2: ({ children }) => <h2 className="text-term-green font-bold text-base mb-2 mt-3">{children}</h2>,
-                      h3: ({ children }) => <h3 className="text-term-amber font-bold mb-1 mt-2">{children}</h3>,
-                      blockquote: ({ children }) => <blockquote className="border-l-2 border-term-dim pl-3 text-term-dim italic my-2">{children}</blockquote>,
+                      a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--cyan)', textDecoration: 'underline', textUnderlineOffset: 2 }}>{children}</a>,
                     }}
                   >
                     {msg.content}
                   </ReactMarkdown>
-                )}
+                </div>
               </div>
-            </div>
+            )
           ))}
         </div>
 
-        <div className="mt-8 pt-4 border-t border-term-border text-center">
-          <p className="text-term-dim text-xs">
+        {/* Colophon */}
+        <hr className="rule-double" style={{ marginTop: 40 }} />
+        <div style={{ textAlign: 'center', padding: '16px 0 4px' }}>
+          <p className="masthead-name" style={{ fontSize: 22, marginBottom: 6 }}>{APP.name}</p>
+          <p className="byline">
             Shared from{' '}
-            <Link href="/" className="text-term-green hover:underline">
+            <Link href="/" style={{ color: 'var(--cyan)', textDecoration: 'none' }}>
               {APP.name}
             </Link>
             {APP.creator ? ` · by ${APP.creator}` : ''}
           </p>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

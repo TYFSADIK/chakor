@@ -265,6 +265,7 @@ Everything lives in `.env.local`. The ones you will actually touch:
 | `OLLAMA_BASE_URL` | Where Ollama runs. Default is fine for a local install. |
 | `LMSTUDIO_BASE_URL` | Where LM Studio's server runs. Default `http://127.0.0.1:1234/v1`. Loaded models appear automatically. |
 | `LLAMA_SERVER_BIN`, `LLAMA_GGUF` | llama.cpp binary plus the default model Chakor runs for you. Switch both live in Settings → Models. |
+| `LLAMA_HOST` | Interface the supervised llama-server binds to. Now defaults to `127.0.0.1`: llama-server has no auth of its own, so it stays loopback-only. Set `0.0.0.0` only if you deliberately want the raw model reachable from your LAN. |
 | `CHAKOR_MODELS_DIR`, `CHAKOR_SUPERVISE_LLAMA` | Extra folders to scan for `.gguf` files. Set supervise to `false` to run llama-server yourself. |
 | `CHAKOR_LLAMA_MAX_CRASHES` | How many fast crashes before Chakor stops relaunching a too-big model and tells you to pick a smaller one. Default 4. |
 | `HF_TOKEN` | Optional Hugging Face token for the in-app downloader. Lifts rate limits and reaches gated repos. Public models need none. |
@@ -272,6 +273,12 @@ Everything lives in `.env.local`. The ones you will actually touch:
 | `OPENROUTER_API_KEY`, `OPENROUTER_MODELS` | One key, many models. List them as `id\|Label`, comma separated. |
 | `SEARXNG_URL`, `BRAVE_SEARCH_API_KEY` | Web search backends. |
 | `NEXT_PUBLIC_APP_NAME`, `NEXT_PUBLIC_APP_TAGLINE`, `APP_CREATOR` | Rebrand the app. |
+
+### Security notes
+
+- Login and registration are rate limited, so hammering them gets nowhere fast.
+- Every response carries baseline security headers including a Content Security Policy (see `next.config.mjs`).
+- API tokens for the OpenAI-compatible `/v1` API are stored as sha256 hashes. The raw token is shown once and never saved.
 
 ### Make it yours
 
@@ -299,6 +306,7 @@ Swap the logo by replacing `public/logo.svg` and the icons in `public/`. Want di
   - Database: `lib/db.ts` (schema self creates on first run)
   - Branding and config: `lib/config.ts`
 - **Add a model provider:** add a `stream*` function in `lib/providers.ts`, register it in `lib/models.ts`, and route it in `app/api/chat/route.ts`. The existing providers are short and copy friendly.
+- **Health check:** `GET /api/health` is unauthenticated and returns `{ ok, db, version }`: 200 when the app is alive and the database answers, 503 when it does not. Point uptime monitors at it; the Docker image uses it for its own HEALTHCHECK.
 - **Run for development:** `npm run dev` (hot reload on port 3001).
 - Before a pull request, run `npm run build` so it type checks. See [CONTRIBUTING.md](CONTRIBUTING.md).
 

@@ -17,13 +17,11 @@ export async function GET() {
 
   const users = db().prepare(`
     SELECT u.id, u.username, u.email, u.created_at, u.is_admin,
-           COUNT(DISTINCT c.id)  AS conv_count,
-           COUNT(DISTINCT m.id)  AS msg_count,
-           MAX(c.updated_at)     AS last_active
+           (SELECT COUNT(*) FROM conversations c WHERE c.user_id = u.id) AS conv_count,
+           (SELECT COUNT(*) FROM messages m JOIN conversations c ON m.conversation_id = c.id
+            WHERE c.user_id = u.id) AS msg_count,
+           (SELECT MAX(updated_at) FROM conversations c WHERE c.user_id = u.id) AS last_active
     FROM users u
-    LEFT JOIN conversations c ON c.user_id = u.id
-    LEFT JOIN messages m ON m.conversation_id = c.id
-    GROUP BY u.id
     ORDER BY u.created_at ASC
   `).all();
 
