@@ -228,8 +228,13 @@ export async function resolveModelPath(cfg: RuntimeConfig): Promise<string | nul
 }
 
 /** The full llama-server argument list for a given model + context. */
-export function buildLlamaArgs(opts: { model: string; ctx: number; alias?: string; mmproj?: string }): string[] {
+export function buildLlamaArgs(opts: { model: string; ctx: number; alias?: string; mmproj?: string; ngl?: number }): string[] {
   const alias = opts.alias ?? process.env.LLAMA_MODEL ?? process.env.CHAKOR_MODEL_ALIAS ?? 'Chakor';
+  // An explicit ngl (the supervisor's OOM degradation) wins over the env, which
+  // itself is the user's configured ceiling. Default 9999 = "all layers".
+  const ngl = opts.ngl !== undefined
+    ? String(Math.max(0, Math.floor(opts.ngl)))
+    : (process.env.LLAMA_NGL ?? '9999');
   const args = [
     '--model', opts.model,
     '--alias', alias,
@@ -239,7 +244,7 @@ export function buildLlamaArgs(opts: { model: string; ctx: number; alias?: strin
     // explicitly if you really want to serve the raw model to the LAN.
     '--host', process.env.LLAMA_HOST ?? '127.0.0.1',
     '--ctx-size', String(Math.round(opts.ctx)),
-    '--n-gpu-layers', process.env.LLAMA_NGL ?? '9999',
+    '--n-gpu-layers', ngl,
     '--threads', process.env.LLAMA_THREADS ?? '8',
     '--no-mmap',
     '--cache-ram', '0',

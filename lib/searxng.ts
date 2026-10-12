@@ -1,5 +1,12 @@
-const SEARXNG_URL = process.env.SEARXNG_URL || 'http://127.0.0.1:8080';
-const BRAVE_API_KEY = process.env.BRAVE_SEARCH_API_KEY;
+// Read lazily, not at module load: tests stub env, and a key added to the
+// process env after boot (e.g. via a settings reload) should take effect.
+function searxngUrl(): string {
+  return process.env.SEARXNG_URL || 'http://127.0.0.1:8080';
+}
+
+function braveApiKey(): string | undefined {
+  return process.env.BRAVE_SEARCH_API_KEY || undefined;
+}
 
 export interface SearchResult {
   title: string;
@@ -11,7 +18,7 @@ export interface SearchResult {
 // ── SearXNG ──────────────────────────────────────────────────────────────────
 
 async function searxngSearch(query: string, limit: number): Promise<SearchResult[]> {
-  const url = new URL('/search', SEARXNG_URL);
+  const url = new URL('/search', searxngUrl());
   url.searchParams.set('q', query);
   url.searchParams.set('format', 'json');
   url.searchParams.set('safesearch', '0');
@@ -38,7 +45,8 @@ async function searxngSearch(query: string, limit: number): Promise<SearchResult
 // ── Brave Search ─────────────────────────────────────────────────────────────
 
 async function braveSearch(query: string, limit: number): Promise<SearchResult[]> {
-  if (!BRAVE_API_KEY) throw new Error('no Brave key');
+  const key = braveApiKey();
+  if (!key) throw new Error('no Brave key');
 
   const url = new URL('https://api.search.brave.com/res/v1/web/search');
   url.searchParams.set('q', query);
@@ -48,7 +56,7 @@ async function braveSearch(query: string, limit: number): Promise<SearchResult[]
     headers: {
       Accept: 'application/json',
       'Accept-Encoding': 'gzip',
-      'X-Subscription-Token': BRAVE_API_KEY,
+      'X-Subscription-Token': key,
     },
     signal: AbortSignal.timeout(8_000),
   });
@@ -124,8 +132,9 @@ export async function searxSearch(query: string, limit = 10): Promise<SearchResu
     if (results.length > 0) return results;
   } catch { /* fall through */ }
 
-  // 2. Brave (if key is set)
-  if (BRAVE_API_KEY) {
+  // 2. Brave (if key is set) — covers SearXNG returning {"results": []} when
+  // every upstream engine is suspended, as well as SearXNG being down outright.
+  if (braveApiKey()) {
     try {
       const results = await braveSearch(query, limit);
       if (results.length > 0) return results;

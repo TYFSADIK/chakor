@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { classifyFailureText } from '@/lib/llama-supervisor';
+import { classifyFailureText, nglDegradeLadder } from '@/lib/llama-supervisor';
 
 // Sample stderr tails as llama-server actually prints them before dying. The
 // exit code alone is useless ("code=1"), so the classifier works off this text.
@@ -55,5 +55,44 @@ describe('classifyFailureText', () => {
     expect(classifyFailureText(
       "unknown model architecture: 'bert'\nfailed to alloc buffer",
     )).toBe('unknown_arch');
+  });
+});
+
+describe('nglDegradeLadder', () => {
+  it('halves down to 0 (CPU-only) from an explicit LLAMA_NGL ceiling', () => {
+    expect(nglDegradeLadder(48)).toEqual([24, 12, 6, 3, 1, 0]);
+  });
+
+  it('treats the 9999 "all layers" default as starting at a real layer count', () => {
+    // Halving 9999 would waste attempts on values no model can reach; the
+    // first step down is 99, a typical full layer count.
+    expect(nglDegradeLadder(9999)).toEqual([49, 24, 12, 6, 3, 0]);
+  });
+
+  it('always ends at 0 even when the rung cap cuts the halving short', () => {
+    const ladder = nglDegradeLadder(99);
+    expect(ladder[ladder.length - 1]).toBe(0);
+    expect(ladder.length).toBeLessThanOrEqual(6);
+    for (let i = 1; i < ladder.length; i++) expect(ladder[i]).toBeLessThan(ladder[i - 1]);
+  });
+
+  it('degrades straight to CPU-only from a single layer', () => {
+    expect(nglDegradeLadder(1)).toEqual([0]);
+  });
+
+  it('has no ladder when GPU offload was already off', () => {
+    expect(nglDegradeLadder(0)).toEqual([]);
+  });
+
+  it('rejects nonsense inputs', () => {
+    expect(nglDegradeLadder(-5)).toEqual([]);
+    expect(nglDegradeLadder(NaN)).toEqual([]);
+    expect(nglDegradeLadder(Infinity)).toEqual([]);
+  });
+
+  it('never suggests a value above the starting point (LLAMA_NGL is the ceiling)', () => {
+    for (const start of [1, 7, 32, 99, 999, 9999]) {
+      for (const rung of nglDegradeLadder(start)) expect(rung).toBeLessThan(start);
+    }
   });
 });

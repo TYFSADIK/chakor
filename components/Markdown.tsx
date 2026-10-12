@@ -1,9 +1,10 @@
 'use client';
 
-import { memo, useRef, useState } from 'react';
+import { memo, useCallback, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
+import { MermaidDiagram } from './Mermaid';
 
 // Shared markdown pipeline: GFM + syntax highlighting + code blocks with a
 // copy button. Used by the chat bubbles, the arena, and the public share page.
@@ -11,12 +12,27 @@ import rehypeHighlight from 'rehype-highlight';
 const IcoCopy = () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>;
 const IcoCheck = () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>;
 
+/** Plain text of a React node tree — survives rehype-highlight's span wrapping. */
+function textOf(node: React.ReactNode): string {
+  if (node == null || typeof node === 'boolean') return '';
+  if (typeof node === 'string' || typeof node === 'number') return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join('');
+  const children = (node as { props?: { children?: React.ReactNode } })?.props?.children;
+  return children !== undefined ? textOf(children) : '';
+}
+
 export const CodeBlock = memo(function CodeBlock({ children }: { children: React.ReactNode }) {
   const [copied, setCopied] = useState(false);
+  const [mermaidFailed, setMermaidFailed] = useState(false);
   const ref = useRef<HTMLPreElement>(null);
   let lang = '';
   try { const m = ((children as {props?:{className?:string}})?.props?.className??'').match(/language-(\w+)/); if(m) lang=m[1]; } catch {}
-  const copy = async () => { try { await navigator.clipboard.writeText(ref.current?.textContent??''); setCopied(true); setTimeout(()=>setCopied(false),2000); } catch {} };
+  const codeText = textOf(children);
+  const copy = async () => { try { await navigator.clipboard.writeText(codeText || ref.current?.textContent || ''); setCopied(true); setTimeout(()=>setCopied(false),2000); } catch {} };
+  const onMermaidError = useCallback(() => setMermaidFailed(true), []);
+  // Mermaid blocks render as diagrams; if the diagram won't parse, fall back
+  // to the plain code block — a bad diagram must never break the message.
+  const asDiagram = lang === 'mermaid' && !mermaidFailed;
   return (
     <div className="codeblock">
       <div className="codeblock-header">
@@ -25,7 +41,9 @@ export const CodeBlock = memo(function CodeBlock({ children }: { children: React
           {copied ? <><IcoCheck /> Copied</> : <><IcoCopy /> Copy</>}
         </button>
       </div>
-      <pre ref={ref}>{children}</pre>
+      {asDiagram
+        ? <MermaidDiagram code={codeText} onError={onMermaidError} />
+        : <pre ref={ref}>{children}</pre>}
     </div>
   );
 });

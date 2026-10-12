@@ -41,6 +41,8 @@ export interface SupervisorStatus {
   failureKind: FailureKind | null;
   model: string | null;
   ctx: number | null;
+  /** GPU layers in force — below the LLAMA_NGL/default ceiling when OOM degradation kicked in. */
+  ngl: number;
   /** We gave up relaunching after the model kept crashing. */
   crashed: boolean;
 }
@@ -65,6 +67,30 @@ export function classifyFailureText(text: string): FailureKind {
   return 'unknown';
 }
 
+/**
+ * The ladder of `--n-gpu-layers` values to retry after an out-of-memory crash,
+ * in order. Each step halves the previous one; the last step is always 0
+ * (CPU-only), the configuration that cannot OOM the GPU. `start` is the value
+ * the failed launch used: LLAMA_NGL when the user set one (their ceiling —
+ * degradation only ever lowers from it), otherwise llama.cpp's default 9999
+ * meaning "all layers". Real models have well under 200 layers, so anything
+ * above 999 is that "all" sentinel and the first sensible step down is 99, a
+ * typical full layer count — halving 9999 would waste attempts on values no
+ * model could reach anyway. Exported (pure) for unit tests.
+ */
+export function nglDegradeLadder(start: number, maxRungs = 6): number[] {
+  let v = Math.floor(start);
+  if (!Number.isFinite(v) || v <= 0) return [];
+  if (v > 999) v = 99;
+  const out: number[] = [];
+  while (v > 0 && out.length < maxRungs) {
+    v = Math.floor(v / 2);
+    out.push(v);
+  }
+  if (out[out.length - 1] !== 0) out[out.length - 1] = 0;
+  return out;
+}
+
 class LlamaSupervisor {
   private child: ChildProcess | null = null;
   private owns = false;            // did we launch it (vs. adopting an external one)
@@ -84,6 +110,18 @@ class LlamaSupervisor {
   // file) is only ever printed to stderr, so keep it for diagnosis.
   private stderrTail: string[] = [];
   private static readonly STDERR_TAIL_LINES = 50;
+
+  // GPU OOM auto-degradation. When a launch dies with failureKind
+  // 'out_of_memory' and GPU offload was active, we don't crash-loop the same
+  // config — we walk down nglDegradeLadder (halving --n-gpu-layers, ending at
+  // 0 = CPU-only). nglOverride is the value currently in force (sticky once
+  // degraded: an OOM is deterministic, so a later relaunch keeps the value
+  // that worked). oomPlan/oomPlanIndex track how far down the ladder we are;
+  // they are one logical launch attempt, so these retries never count as
+  // fast crashes and never trip the gave-up counter.
+  private nglOverride: number | null = null;
+  private oomPlan: number[] | null = null;
+  private oomPlanIndex = 0;
 
   // A model that's too big for the machine makes llama-server die within a second
   // or two of launch, every time. Without a cap the supervisor would respawn it
@@ -140,7 +178,7 @@ class LlamaSupervisor {
 
       await this.gpuPrep();
 
-      const args = buildLlamaArgs({ model, ctx, mmproj });
+      const args = buildLlamaArgs({ model, ctx, mmproj, ngl: this.nglOverride ?? undefined });
       const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'] });
       this.child = child;
       this.owns = true;
@@ -160,27 +198,16 @@ class LlamaSupervisor {
         // a failed spawn, so without this the supervisor would keep reporting
         // running:true forever. Treat it like an instant crash.
         this.child = null;
-        this.fastCrashes++;
         this.failureKind = 'spawn_error';
-        this.handleUnexpectedDeath(`llama-server failed to start (${e.message})`);
+        this.handleUnexpectedDeath(`llama-server failed to start (${e.message})`, 0);
       });
       child.on('exit', (code, signal) => {
         this.child = null;
         if (this.intentionalStop) { this.intentionalStop = false; return; }
-
-        const uptime = Date.now() - this.lastSpawnAt;
-        // Crashed almost immediately = it never got healthy. That's the OOM /
-        // too-big-model signature. Count consecutive fast crashes; a launch that
-        // actually ran for a while resets the counter AND the backoff (a one-off,
-        // worth retrying quickly).
-        if (uptime < LlamaSupervisor.FAST_CRASH_MS) {
-          this.fastCrashes++;
-        } else {
-          this.fastCrashes = 0;
-          this.backoff = 1000;
-        }
-
-        this.handleUnexpectedDeath(`llama-server exited (code=${code ?? '?'} signal=${signal ?? '-'})`);
+        this.handleUnexpectedDeath(
+          `llama-server exited (code=${code ?? '?'} signal=${signal ?? '-'})`,
+          Date.now() - this.lastSpawnAt,
+        );
       });
     } catch (e) {
       this.lastError = e instanceof Error ? e.message : String(e);
@@ -210,9 +237,79 @@ class LlamaSupervisor {
     return classifyFailureText(`${detail}\n${this.stderrTail.join('\n')}`);
   }
 
+  /** The --n-gpu-layers value a launch uses right now (degradation override, else env, else "all"). */
+  private currentNgl(): number {
+    if (this.nglOverride !== null) return this.nglOverride;
+    const raw = process.env.LLAMA_NGL;
+    if (raw === undefined) return 9999;
+    const n = Math.floor(Number(raw));
+    return Number.isFinite(n) && n >= 0 ? n : 9999;
+  }
+
+  /**
+   * Next rung on the OOM degradation ladder, or null when there's nothing left
+   * to try (already at CPU-only, or the launch that OOM'd had GPU offload off
+   * from the start). Computes the plan lazily from the value that first OOM'd.
+   */
+  private nextOomRetryNgl(): number | null {
+    if (!this.oomPlan) {
+      const start = this.currentNgl();
+      this.oomPlan = [start, ...nglDegradeLadder(start)];
+      this.oomPlanIndex = 0;
+    }
+    const next = this.oomPlan[this.oomPlanIndex + 1];
+    if (next === undefined) return null;
+    this.oomPlanIndex++;
+    return next;
+  }
+
   /** Crash accounting shared by the exit and spawn-error paths. */
-  private handleUnexpectedDeath(detail: string): void {
+  private handleUnexpectedDeath(detail: string, uptime: number): void {
     this.failureKind = this.classifyFailure(detail);
+
+    // Out of memory with GPU offload on: don't crash-loop a config we already
+    // know doesn't fit. Step down the GPU layer ladder and retry right away.
+    // These retries are one logical launch attempt — they deliberately do NOT
+    // touch fastCrashes or the backoff, so a model that needs ngl 24 doesn't
+    // burn its gave-up budget getting there.
+    if (this.failureKind === 'out_of_memory') {
+      const next = this.nextOomRetryNgl();
+      if (next !== null) {
+        this.nglOverride = next;
+        this.lastError =
+          `${detail} — GPU out of memory; retrying with ` +
+          (next === 0 ? 'GPU offload disabled (CPU only).' : `${next} GPU layers.`);
+        setTimeout(() => { if (this.enabled && this.owns && !this.crashed && !this.child) void this.launch(); }, 1000);
+        return;
+      }
+      if (this.oomPlan && this.oomPlan.length > 1) {
+        // Even the last rung (CPU-only) OOM'd — nothing left to step down to.
+        // Give up now instead of relaunching a config we just watched fail.
+        this.crashed = true;
+        const name = this.model ? this.model.split('/').pop() : 'the model';
+        const tried = this.oomPlan.slice(0, this.oomPlanIndex + 1).join('/');
+        this.lastError =
+          `${name} ran out of memory at every offload level (tried ${tried} GPU layers, ` +
+          `down to CPU-only). ${name} does not fit in this machine's memory. ` +
+          'Pick a smaller model in Settings, or switch to Ollama or LM Studio. ' +
+          `(last error: ${detail})`;
+        return;
+      }
+      // No GPU offload was active (ngl 0 from the start) — fall through to the
+      // normal accounting; this is a plain RAM OOM crash loop.
+    }
+
+    // Crashed almost immediately = it never got healthy. That's the OOM /
+    // too-big-model signature. Count consecutive fast crashes; a launch that
+    // actually ran for a while resets the counter AND the backoff (a one-off,
+    // worth retrying quickly).
+    if (uptime < LlamaSupervisor.FAST_CRASH_MS) {
+      this.fastCrashes++;
+    } else {
+      this.fastCrashes = 0;
+      this.backoff = 1000;
+    }
+
     if (this.fastCrashes >= this.maxFastCrashes) {
       // Stop the runaway loop and say something the user can act on — the real
       // reason, not the blanket "model is probably too large".
@@ -278,6 +375,11 @@ class LlamaSupervisor {
     this.crashed = false;
     this.fastCrashes = 0;
     this.backoff = 1000;
+    // A new model/context gets the full GPU offload chance again — the old
+    // OOM ladder was computed for a config that may no longer apply.
+    this.nglOverride = null;
+    this.oomPlan = null;
+    this.oomPlanIndex = 0;
     if (cfg?.model || cfg?.ctx) {
       const model = cfg.model ?? this.model ?? (await resolveModelPath(await readRuntimeEnv()));
       const ctx = cfg.ctx ?? this.ctx ?? (Number(process.env.LLAMA_CONTEXT ?? 8192) || 8192);
@@ -318,6 +420,7 @@ class LlamaSupervisor {
       failureKind: this.failureKind,
       model: this.model,
       ctx: this.ctx,
+      ngl: this.currentNgl(),
       crashed: this.crashed,
     };
   }

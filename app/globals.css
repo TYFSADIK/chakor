@@ -302,6 +302,11 @@ html.dark body::before { mix-blend-mode: screen; opacity: 0.35; }
 .codeblock pre { overflow-x: auto; padding: 16px; margin: 0; font-size: 13px; line-height: 1.65; white-space: pre; color: #e9dfc8; }
 .hljs { background: transparent !important; padding: 0 !important; }
 
+/* Mermaid diagrams render inside the same "plate" frame as code blocks. */
+.mermaid-diagram { display: flex; justify-content: center; padding: 16px; background: var(--bg); overflow-x: auto; }
+.mermaid-diagram svg { max-width: 100%; height: auto; }
+.mermaid-loading { font-size: 12px; color: var(--fg-3); font-family: 'JetBrains Mono', monospace; }
+
 /* ─── Chakor logo mark ───────────────────────────────────────── */
 .chakor-mark { filter: none; }
 .chakor-mark-lg { filter: none; }

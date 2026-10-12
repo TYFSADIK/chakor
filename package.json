@@ -19,6 +19,7 @@
     "bcryptjs": "2.4.3",
     "better-sqlite3": "11.5.0",
     "highlight.js": "11.10.0",
+    "mermaid": "^11.17.2",
     "next": "^15.5.23",
     "next-auth": "^5.0.0-beta.32",
     "pdf-parse": "^2.4.5",
