@@ -230,10 +230,14 @@ export async function resolveModelPath(cfg: RuntimeConfig): Promise<string | nul
 /** The full llama-server argument list for a given model + context. */
 export function buildLlamaArgs(opts: { model: string; ctx: number; alias?: string; mmproj?: string; ngl?: number }): string[] {
   const alias = opts.alias ?? process.env.LLAMA_MODEL ?? process.env.CHAKOR_MODEL_ALIAS ?? 'Chakor';
-  // An explicit ngl (the supervisor's OOM degradation) wins over the env, which
-  // itself is the user's configured ceiling. Default 9999 = "all layers".
+  // GPU offload. Default is ALL layers on the GPU (9999) — CPU compute is not
+  // an acceptable fallback for interactive use. The memory budget is kept
+  // lean instead (see the flags below) so full offload still leaves VRAM
+  // headroom for long generations; the supervisor's OOM ladder is the
+  // emergency backstop if a model genuinely doesn't fit. An explicit ladder
+  // value or LLAMA_NGL always wins.
   const ngl = opts.ngl !== undefined
-    ? String(Math.max(0, Math.floor(opts.ngl)))
+    ? String(Math.max(1, Math.floor(opts.ngl)))
     : (process.env.LLAMA_NGL ?? '9999');
   const args = [
     '--model', opts.model,
@@ -245,10 +249,17 @@ export function buildLlamaArgs(opts: { model: string; ctx: number; alias?: strin
     '--host', process.env.LLAMA_HOST ?? '127.0.0.1',
     '--ctx-size', String(Math.round(opts.ctx)),
     '--n-gpu-layers', ngl,
+    // VRAM conservation so full GPU offload fits with headroom on small cards:
+    // one sequence slot (KV + recurrent state scale per slot), and a small
+    // batch window (the compute buffer is sized from these — the defaults
+    // 2048/512 reserve ~500 MiB, 512/128 takes roughly a quarter of that).
+    '--parallel', process.env.LLAMA_PARALLEL ?? '1',
+    '--batch-size', process.env.LLAMA_BATCH ?? '512',
+    '--ubatch-size', process.env.LLAMA_UBATCH ?? '128',
     '--threads', process.env.LLAMA_THREADS ?? '8',
     '--no-mmap',
     '--cache-ram', '0',
-    '--n-predict', process.env.LLAMA_NPREDICT ?? '3000',
+    '--n-predict', process.env.LLAMA_NPREDICT ?? '4096',
   ];
   // Qwen3-family models default to "thinking" mode; turn it off so replies come
   // straight out. Other families reject this kwarg, so scope it to Qwen3 only.

@@ -8,7 +8,7 @@
 <br/>
 
 <a href="https://github.com/TYFSADIK/chakor/stargazers"><img src="https://img.shields.io/github/stars/TYFSADIK/chakor?style=for-the-badge&color=22c55e&labelColor=0b110e&logo=github" alt="Stars"/></a>
-<img src="https://img.shields.io/badge/version-2.7.0-22c55e?style=for-the-badge&labelColor=0b110e" alt="Version 2.7.0"/>
+<img src="https://img.shields.io/badge/version-2.7.1-22c55e?style=for-the-badge&labelColor=0b110e" alt="Version 2.7.1"/>
 <img src="https://img.shields.io/badge/license-MIT-22c55e?style=for-the-badge&labelColor=0b110e" alt="MIT License"/>
 <img src="https://img.shields.io/badge/node-%3E%3D20-22c55e?style=for-the-badge&labelColor=0b110e&logo=nodedotjs" alt="Node 20 or newer"/>
 <img src="https://img.shields.io/badge/docker-compose%20up-22c55e?style=for-the-badge&labelColor=0b110e&logo=docker" alt="Docker"/>
@@ -36,15 +36,16 @@ Think of it as a lighter, friendlier alternative to Open WebUI, and an open sour
 
 <div align="center">
 
-<img src="docs/preview.png" alt="The Chakor interface: a deep research answer with live pipeline steps and cited source cards, while the Agent Workspace panel on the right builds a slide deck in a sandboxed Python environment" width="100%" />
+<img src="docs/shot-chat.png" alt="The Chakor interface: a step-by-step answer with a live rendered mermaid flowchart, the Agent Workspace panel on the right" width="100%" />
 
-<sub>Deep research with cited sources on the left. A sandboxed agent building real files on the right.</sub>
+<sub>Real screenshot: a step-by-step answer with an inline rendered diagram. The Agent Workspace panel sits on the right.</sub>
 
 </div>
 
-<!-- The images above are generated from code in docs/build-assets.mjs so they stay
-     on-brand and easy to regenerate. The one thing that beats them is a real 10-second
-     screen recording saved as docs/demo.gif at the very top. See docs/README.md. -->
+<!-- The banner and social card are generated from code in docs/build-assets.mjs so they
+     stay on-brand and easy to regenerate. The screenshots are real captures of the app.
+     The one thing that beats them is a real 10-second screen recording saved as
+     docs/demo.gif at the very top. See docs/README.md. -->
 
 ## Why this exists
 
@@ -65,7 +66,7 @@ Three things you will not find stitched together anywhere else.
 Most apps let you download a model, load it, and find out it was too big when it crashes. Chakor reads your RAM and GPU first and tags every model **FITS**, **TIGHT**, or **TOO BIG**, then points you at the best one that actually runs. A 4 GB laptop and a 24 GB workstation each get an honest answer, not a crash.
 
 <div align="center">
-<img src="docs/fit.png" alt="Settings showing detected hardware, live engine status, and each local model tagged FITS, TIGHT, or TOO BIG with a recommended pick" width="94%"/>
+<img src="docs/shot-models.png" alt="Settings showing detected hardware, live engine status, and local models tagged by how they fit the machine" width="94%"/>
 </div>
 
 ### Get models without touching a terminal
@@ -97,6 +98,7 @@ Deep Research is a pipeline, not a single search. It plans four angles, searches
 - ✓ Hardware-aware: Chakor reads your RAM and GPU and tags each local model FITS, TIGHT, or TOO BIG, so you never load one that crashes
 - ✓ Download GGUF models from Hugging Face in the app, on a background job with progress and speed you can watch from anywhere
 - ✓ Switch engines (llama.cpp, Ollama, LM Studio) from the model menu; it frees the old one first so a modest GPU never OOMs, and points you at a running engine if one is down
+- ✓ Full GPU offload with a lean VRAM serving budget, and automatic offload recovery if a model ever OOMs — no crash loops, no silent CPU fallback
 - ✓ Load and unload local models and see their size and quant from the model picker
 
 **Knowledge and the web**
@@ -112,6 +114,7 @@ Deep Research is a pipeline, not a single search. It plans four angles, searches
 - ✓ Live activity log shows every step the agent takes, in plain language
 
 **More than a chat box**
+- ✓ Answers with visuals: detailed replies come with rendered mermaid diagrams, comparison tables, and step-by-step structure, while quick questions get quick answers
 - ✓ Compare: run the same prompt across models side by side, blind, vote, and keep a leaderboard
 - ✓ Memory: the assistant remembers facts you want it to, across conversations
 - ✓ Notes: a built-in Keep-style notepad with checklists, colors, pinning, and archive
@@ -123,6 +126,7 @@ Deep Research is a pipeline, not a single search. It plans four angles, searches
 **Yours and private**
 - ✓ No telemetry. Conversations stay in a local SQLite database on your disk
 - ✓ Multi user with accounts and an admin panel, clean separation between people
+- ✓ Hosting for others? Regular users only ever see your brand name as the model — the real model, engine, and hardware details stay admin-only
 - ✓ Theme editor: recolor the whole app live from the settings
 - ✓ Rebrand the name, tagline, and look from a config file, no code edits
 - ✓ Installable as an app on phone and desktop, built for small screens too

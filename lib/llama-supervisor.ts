@@ -69,25 +69,27 @@ export function classifyFailureText(text: string): FailureKind {
 
 /**
  * The ladder of `--n-gpu-layers` values to retry after an out-of-memory crash,
- * in order. Each step halves the previous one; the last step is always 0
- * (CPU-only), the configuration that cannot OOM the GPU. `start` is the value
- * the failed launch used: LLAMA_NGL when the user set one (their ceiling —
- * degradation only ever lowers from it), otherwise llama.cpp's default 9999
- * meaning "all layers". Real models have well under 200 layers, so anything
- * above 999 is that "all" sentinel and the first sensible step down is 99, a
- * typical full layer count — halving 9999 would waste attempts on values no
- * model could reach anyway. Exported (pure) for unit tests.
+ * in order. Each step halves the previous one; the last step is always 1 —
+ * offload is reduced but never fully disabled, because CPU-only inference is
+ * too slow to be a useful fallback. Layers that don't fit in VRAM stay in RAM
+ * (partial offload), which is exactly what the lower rungs give you. `start`
+ * is the value the failed launch used: LLAMA_NGL when the user set one (their
+ * ceiling — degradation only ever lowers from it), otherwise llama.cpp's
+ * default 9999 meaning "all layers". Real models have well under 200 layers,
+ * so anything above 999 is that "all" sentinel and the first sensible step
+ * down is 99, a typical full layer count — halving 9999 would waste attempts
+ * on values no model could reach anyway. Exported (pure) for unit tests.
  */
 export function nglDegradeLadder(start: number, maxRungs = 6): number[] {
   let v = Math.floor(start);
-  if (!Number.isFinite(v) || v <= 0) return [];
+  if (!Number.isFinite(v) || v <= 1) return [];
   if (v > 999) v = 99;
   const out: number[] = [];
-  while (v > 0 && out.length < maxRungs) {
-    v = Math.floor(v / 2);
+  while (v > 1 && out.length < maxRungs) {
+    v = Math.max(1, Math.floor(v / 2));
     out.push(v);
   }
-  if (out[out.length - 1] !== 0) out[out.length - 1] = 0;
+  if (out[out.length - 1] !== 1) out[out.length - 1] = 1;
   return out;
 }
 
@@ -113,8 +115,8 @@ class LlamaSupervisor {
 
   // GPU OOM auto-degradation. When a launch dies with failureKind
   // 'out_of_memory' and GPU offload was active, we don't crash-loop the same
-  // config — we walk down nglDegradeLadder (halving --n-gpu-layers, ending at
-  // 0 = CPU-only). nglOverride is the value currently in force (sticky once
+  // config — we walk down nglDegradeLadder (halving --n-gpu-layers, bottoming
+  // out at 1 layer; CPU-only is deliberately never tried). nglOverride is the value currently in force (sticky once
   // degraded: an OOM is deterministic, so a later relaunch keeps the value
   // that worked). oomPlan/oomPlanIndex track how far down the ladder we are;
   // they are one logical launch attempt, so these retries never count as
@@ -248,8 +250,8 @@ class LlamaSupervisor {
 
   /**
    * Next rung on the OOM degradation ladder, or null when there's nothing left
-   * to try (already at CPU-only, or the launch that OOM'd had GPU offload off
-   * from the start). Computes the plan lazily from the value that first OOM'd.
+   * to try (already at minimal 1-layer offload, or the launch that OOM'd had
+   * GPU offload off from the start). Computes the plan lazily from the value that first OOM'd.
    */
   private nextOomRetryNgl(): number | null {
     if (!this.oomPlan) {
@@ -278,19 +280,19 @@ class LlamaSupervisor {
         this.nglOverride = next;
         this.lastError =
           `${detail} — GPU out of memory; retrying with ` +
-          (next === 0 ? 'GPU offload disabled (CPU only).' : `${next} GPU layers.`);
+          `${next} GPU layer${next === 1 ? '' : 's'} (the rest stays in RAM).`;
         setTimeout(() => { if (this.enabled && this.owns && !this.crashed && !this.child) void this.launch(); }, 1000);
         return;
       }
       if (this.oomPlan && this.oomPlan.length > 1) {
-        // Even the last rung (CPU-only) OOM'd — nothing left to step down to.
-        // Give up now instead of relaunching a config we just watched fail.
+        // Even minimal GPU offload (1 layer) OOM'd — nothing left to step down
+        // to. Give up now instead of relaunching a config we just watched fail.
         this.crashed = true;
         const name = this.model ? this.model.split('/').pop() : 'the model';
         const tried = this.oomPlan.slice(0, this.oomPlanIndex + 1).join('/');
         this.lastError =
           `${name} ran out of memory at every offload level (tried ${tried} GPU layers, ` +
-          `down to CPU-only). ${name} does not fit in this machine's memory. ` +
+          `down to 1). ${name} does not fit in this machine's VRAM + RAM. ` +
           'Pick a smaller model in Settings, or switch to Ollama or LM Studio. ' +
           `(last error: ${detail})`;
         return;

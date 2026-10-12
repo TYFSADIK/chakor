@@ -7,10 +7,15 @@ rebrand or a UI change.
 | File | Where it is used |
 | --- | --- |
 | `banner.png` | Hero at the very top. Also works as the repo's social preview image (GitHub → Settings → General → Social preview). |
-| `preview.png` | The chat interface, the main "look" shot: deep research with cited sources plus the Agent Workspace panel. |
-| `fit.png` | The hardware-aware model picker: FITS / TIGHT / TOO BIG. |
-| `download.png` | The in-app Hugging Face downloader with the background-download tray. |
+| `shot-chat.png` | Real screenshot: the chat interface with an inline rendered mermaid diagram and the Agent Workspace panel. |
+| `shot-models.png` | Real screenshot: Settings → Models with detected hardware and live engine status. |
+| `preview.png` | Generated mockup: deep research with cited sources plus the Agent Workspace panel. |
+| `fit.png` | Generated mockup: the hardware-aware model picker, FITS / TIGHT / TOO BIG. |
+| `download.png` | Generated mockup: the in-app Hugging Face downloader with the background-download tray. |
 | `og.png` | Social card (1200×630). Copied to `public/og.png` by the build script and referenced from the app's Open Graph metadata. |
+
+`shot-*.png` are real captures of the running app; regenerate them with any
+browser screenshot tool after a UI change. Everything else is generated:
 
 ## Regenerate them
 

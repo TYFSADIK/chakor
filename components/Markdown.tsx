@@ -4,7 +4,7 @@ import { memo, useCallback, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
-import { MermaidDiagram } from './Mermaid';
+import { MermaidBoundary, MermaidDiagram } from './Mermaid';
 
 // Shared markdown pipeline: GFM + syntax highlighting + code blocks with a
 // copy button. Used by the chat bubbles, the arena, and the public share page.
@@ -23,16 +23,19 @@ function textOf(node: React.ReactNode): string {
 
 export const CodeBlock = memo(function CodeBlock({ children }: { children: React.ReactNode }) {
   const [copied, setCopied] = useState(false);
-  const [mermaidFailed, setMermaidFailed] = useState(false);
   const ref = useRef<HTMLPreElement>(null);
   let lang = '';
   try { const m = ((children as {props?:{className?:string}})?.props?.className??'').match(/language-(\w+)/); if(m) lang=m[1]; } catch {}
   const codeText = textOf(children);
   const copy = async () => { try { await navigator.clipboard.writeText(codeText || ref.current?.textContent || ''); setCopied(true); setTimeout(()=>setCopied(false),2000); } catch {} };
-  const onMermaidError = useCallback(() => setMermaidFailed(true), []);
   // Mermaid blocks render as diagrams; if the diagram won't parse, fall back
   // to the plain code block — a bad diagram must never break the message.
-  const asDiagram = lang === 'mermaid' && !mermaidFailed;
+  // The failure is remembered PER CODE STRING: while a reply is streaming the
+  // block is incomplete and any render attempt can fail, but the code keeps
+  // changing, so a completed diagram always earns a fresh attempt.
+  const [mermaidFailedFor, setMermaidFailedFor] = useState<string | null>(null);
+  const onMermaidError = useCallback(() => setMermaidFailedFor(codeText), [codeText]);
+  const asDiagram = lang === 'mermaid' && mermaidFailedFor !== codeText;
   return (
     <div className="codeblock">
       <div className="codeblock-header">
@@ -42,7 +45,11 @@ export const CodeBlock = memo(function CodeBlock({ children }: { children: React
         </button>
       </div>
       {asDiagram
-        ? <MermaidDiagram code={codeText} onError={onMermaidError} />
+        ? (
+          <MermaidBoundary fallback={<pre ref={ref}>{children}</pre>}>
+            <MermaidDiagram code={codeText} onError={onMermaidError} />
+          </MermaidBoundary>
+        )
         : <pre ref={ref}>{children}</pre>}
     </div>
   );

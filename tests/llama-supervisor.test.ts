@@ -59,28 +59,31 @@ describe('classifyFailureText', () => {
 });
 
 describe('nglDegradeLadder', () => {
-  it('halves down to 0 (CPU-only) from an explicit LLAMA_NGL ceiling', () => {
-    expect(nglDegradeLadder(48)).toEqual([24, 12, 6, 3, 1, 0]);
+  it('halves down to 1 (minimal GPU offload) from an explicit LLAMA_NGL ceiling', () => {
+    expect(nglDegradeLadder(48)).toEqual([24, 12, 6, 3, 1]);
   });
 
   it('treats the 9999 "all layers" default as starting at a real layer count', () => {
     // Halving 9999 would waste attempts on values no model can reach; the
     // first step down is 99, a typical full layer count.
-    expect(nglDegradeLadder(9999)).toEqual([49, 24, 12, 6, 3, 0]);
+    expect(nglDegradeLadder(9999)).toEqual([49, 24, 12, 6, 3, 1]);
   });
 
-  it('always ends at 0 even when the rung cap cuts the halving short', () => {
+  it('always ends at 1 (GPU stays on) even when the rung cap cuts the halving short', () => {
     const ladder = nglDegradeLadder(99);
-    expect(ladder[ladder.length - 1]).toBe(0);
+    expect(ladder[ladder.length - 1]).toBe(1);
     expect(ladder.length).toBeLessThanOrEqual(6);
     for (let i = 1; i < ladder.length; i++) expect(ladder[i]).toBeLessThan(ladder[i - 1]);
   });
 
-  it('degrades straight to CPU-only from a single layer', () => {
-    expect(nglDegradeLadder(1)).toEqual([0]);
+  it('never goes CPU-only (0 is never a rung)', () => {
+    for (const start of [1, 2, 7, 32, 99, 999, 9999]) {
+      for (const rung of nglDegradeLadder(start)) expect(rung).toBeGreaterThanOrEqual(1);
+    }
   });
 
-  it('has no ladder when GPU offload was already off', () => {
+  it('has no ladder when already at or below minimal offload', () => {
+    expect(nglDegradeLadder(1)).toEqual([]);
     expect(nglDegradeLadder(0)).toEqual([]);
   });
 
