@@ -4,7 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { requireUser } from "@/lib/guard";
 import { getConversation } from "@/lib/db";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -15,11 +15,9 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ convId: string }> }
 ) {
-  const session = await auth();
-  if (!session?.user) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
-  const userId = (session.user as unknown as { id: number }).id;
+  const authd = await requireUser();
+  if (authd instanceof NextResponse) return authd;
+  const { userId } = authd;
 
   const { convId } = await params;
   if (!/^[a-zA-Z0-9-]+$/.test(convId)) {

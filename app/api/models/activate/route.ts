@@ -15,9 +15,11 @@ function isAdmin(session: Session | null): boolean {
 
 // GET — current exclusivity setting + whether this machine could even handle
 // multiple models loaded at once (so the UI knows whether to offer the toggle).
+// Admin only, like everything else that exposes how the server's models run.
 export async function GET() {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  if (!isAdmin(session)) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
   const [settings, hw] = await Promise.all([readAppSettings(), detectHardware()]);
   return NextResponse.json({ multiModel: settings.multiModel, canMultiModel: canRunMultipleModels(hw) });
 }

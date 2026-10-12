@@ -25,13 +25,24 @@ WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     CHAKOR_DB_PATH=/data/chakor.db \
-    CHAKOR_MODELS_DIR=/data/models
+    CHAKOR_MODELS_DIR=/data/models \
+    CHAKOR_WORKSPACE=/data/workspaces \
+    CHAKOR_PYTHON=/app/.venv/bin/python
+# Agent Workspace runs Python (docx/pptx/charts) through scripts/sandbox-runner.py.
+# Give the runtime its own venv so the host's python is never needed. The venv
+# stays root-owned on purpose: the app (and sandboxed code) only reads it.
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-venv \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /app/.venv \
+    && /app/.venv/bin/pip install --no-cache-dir python-docx python-pptx matplotlib pandas
 COPY --from=build --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/.next ./.next
 COPY --from=build --chown=node:node /app/public ./public
 COPY --from=build --chown=node:node /app/package.json ./package.json
 COPY --from=build --chown=node:node /app/next.config.mjs ./next.config.mjs
-COPY --from=build --chown=node:node /app/scripts ./scripts
+# Only the scripts the server actually runs: DB init and the sandbox runner.
+COPY --from=build --chown=node:node /app/scripts/init-db.mjs ./scripts/init-db.mjs
+COPY --from=build --chown=node:node /app/scripts/sandbox-runner.py ./scripts/sandbox-runner.py
 COPY --chown=node:node docker-entrypoint.sh ./docker-entrypoint.sh
 RUN mkdir -p /data/models && chown -R node:node /data && chmod +x docker-entrypoint.sh
 USER node

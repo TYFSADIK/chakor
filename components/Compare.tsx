@@ -2,9 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeHighlight from 'rehype-highlight';
+import { Markdown } from './Markdown';
 import { APP } from '@/lib/config';
 
 type Model = { id: string; name: string; provider: string };
@@ -32,6 +30,9 @@ export default function Compare() {
   const [revealed, setRevealed] = useState(false);
   const [voted, setVoted] = useState<string | null>(null);
   const [board, setBoard] = useState<Board[]>([]);
+  // The prompt is snapshotted at send time so editing mid-run can't change what
+  // the models were actually asked (and what a vote records).
+  const [lockedPrompt, setLockedPrompt] = useState('');
   const abortRef = useRef<AbortController[]>([]);
   const mountedRef = useRef(true);
 
@@ -61,12 +62,12 @@ export default function Compare() {
     setSelected((p) => p.includes(id) ? p.filter((x) => x !== id) : p.length >= MAX ? p : [...p, id]);
   }
 
-  async function streamOne(modelId: string, signal: AbortSignal) {
+  async function streamOne(modelId: string, promptText: string, signal: AbortSignal) {
     const setRes = (fn: (p: Record<string, Result>) => Record<string, Result>) => { if (mountedRef.current) setResults(fn); };
     try {
       const r = await fetch('/api/compare', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: prompt.trim(), modelId }), signal,
+        body: JSON.stringify({ prompt: promptText, modelId }), signal,
       });
       if (!r.ok || !r.body) {
         const d = await r.json().catch(() => null) as { error?: string } | null;
@@ -97,13 +98,15 @@ export default function Compare() {
 
   async function run() {
     if (selected.length < 2 || !prompt.trim() || running) return;
+    const promptText = prompt.trim();
+    setLockedPrompt(promptText);
     const order = blind ? shuffle(selected) : [...selected];
     setRunOrder(order);
     setResults(Object.fromEntries(order.map((id) => [id, { content: '', done: false } as Result])));
     setVoted(null); setRevealed(!blind); setRunning(true);
     const controllers = order.map(() => new AbortController());
     abortRef.current = controllers;
-    await Promise.all(order.map((id, i) => streamOne(id, controllers[i].signal)));
+    await Promise.all(order.map((id, i) => streamOne(id, promptText, controllers[i].signal)));
     if (mountedRef.current) setRunning(false);
   }
 
@@ -114,7 +117,7 @@ export default function Compare() {
     try {
       await fetch('/api/compare/vote', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ winner: modelId, models: runOrder, prompt: prompt.trim() }),
+        body: JSON.stringify({ winner: modelId, models: runOrder, prompt: lockedPrompt }),
       });
     } catch { /* non-fatal */ }
     loadBoard();
@@ -156,9 +159,12 @@ export default function Compare() {
 
           <textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3}
             placeholder="Ask the same thing of every model…"
+            disabled={running}
+            aria-label="Prompt for all models"
             onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); run(); } }}
             className="inp"
-            style={{ lineHeight: 1.6, resize: 'vertical', minHeight: 70 }} />
+            style={{ lineHeight: 1.6, resize: 'vertical', minHeight: 70, opacity: running ? 0.6 : 1 }} />
+          {running && <p className="byline" style={{ margin: '-6px 0 0', textTransform: 'none' }}>Prompt is locked while the models are answering.</p>}
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
             <button onClick={() => setBlind((b) => !b)}
@@ -198,7 +204,7 @@ export default function Compare() {
                     {res.error
                       ? <p style={{ color: 'var(--err)', fontSize: 13 }}>{res.error}</p>
                       : res.content
-                        ? <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>{res.done ? res.content : res.content + '▋'}</ReactMarkdown>
+                        ? <Markdown>{res.done ? res.content : res.content + '▋'}</Markdown>
                         : <span className="font-fell" style={{ color: 'var(--fg-4)', fontSize: 14 }}>{res.done ? '(no output)' : 'Thinking…'}</span>}
                   </div>
                   <div style={{ padding: '10px 14px', borderTop: '1px solid var(--bd-2)' }}>

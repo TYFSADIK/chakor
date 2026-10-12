@@ -1,8 +1,8 @@
 import { notFound } from 'next/navigation';
 import { getConversationBySlug, listMessages } from '@/lib/db';
 import Link from 'next/link';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { Markdown } from '@/components/Markdown';
+import { SourceCards } from '@/components/SourceCards';
 import { APP } from '@/lib/config';
 
 export const dynamic = 'force-dynamic';
@@ -60,31 +60,28 @@ export default async function SharePage({ params }: Params) {
               /* Reader's letter: an inset card on darker stock. */
               <div key={msg.id} style={{ background: 'var(--bg-1)', border: '1px solid var(--bd-2)', borderLeft: '3px solid var(--fg)', padding: '13px 16px' }}>
                 <p className="kicker" style={{ marginBottom: 6, fontSize: 10 }}>The Reader writes</p>
-                <div style={{ whiteSpace: 'pre-wrap', fontSize: 14.5, lineHeight: 1.65, color: 'var(--fg-2)', wordBreak: 'break-word' }}>
-                  {msg.content}
-                </div>
+                {msg.images && msg.images.length > 0 && (
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: msg.content ? 10 : 0 }}>
+                    {msg.images.map((src, i) => (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img key={i} src={src} alt={`Attachment ${i + 1}`} style={{ maxWidth: 240, maxHeight: 240, border: '1px solid var(--bd-2)', objectFit: 'cover' }} />
+                    ))}
+                  </div>
+                )}
+                {msg.content && (
+                  <div style={{ whiteSpace: 'pre-wrap', fontSize: 14.5, lineHeight: 1.65, color: 'var(--fg-2)', wordBreak: 'break-word' }}>
+                    {msg.content}
+                  </div>
+                )}
               </div>
             ) : (
-              /* The paper answers: running article copy. */
+              /* The paper answers: running article copy. Same markdown pipeline
+                 as the chat: GFM, syntax highlighting, copyable code blocks. */
               <div key={msg.id}>
                 <p className="kicker" style={{ marginBottom: 8, fontSize: 10 }}>{APP.name} replies</p>
+                {msg.sources && msg.sources.length > 0 && <SourceCards sources={msg.sources} />}
                 <div className="prose-ai" style={{ fontSize: 15.5 }}>
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      pre: ({ children }) => (
-                        <pre className="no-scroll" style={{ overflowX: 'auto', background: 'var(--bg-2)', border: '1px solid var(--bd-2)', padding: '12px 14px', margin: '12px 0', fontSize: 12.5, lineHeight: 1.6, fontFamily: "'JetBrains Mono', monospace", whiteSpace: 'pre', color: 'var(--fg)' }}>{children}</pre>
-                      ),
-                      code: ({ className, children, ...props }) => {
-                        const isBlock = !!(className && /language-/.test(className));
-                        if (isBlock) return <code className={className} {...props}>{children}</code>;
-                        return <code style={{ background: 'var(--bg-2)', border: '1px solid var(--bd-2)', padding: '1px 5px', fontSize: '0.85em', fontFamily: "'JetBrains Mono', monospace", color: 'var(--g-text)' }} {...props}>{children}</code>;
-                      },
-                      a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" style={{ color: 'var(--cyan)', textDecoration: 'underline', textUnderlineOffset: 2 }}>{children}</a>,
-                    }}
-                  >
-                    {msg.content}
-                  </ReactMarkdown>
+                  <Markdown>{msg.content}</Markdown>
                 </div>
               </div>
             )

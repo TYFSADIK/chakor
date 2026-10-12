@@ -7,9 +7,10 @@ rebrand or a UI change.
 | File | Where it is used |
 | --- | --- |
 | `banner.png` | Hero at the very top. Also works as the repo's social preview image (GitHub → Settings → General → Social preview). |
-| `preview.png` | The chat interface, the main "look" shot. |
+| `preview.png` | The chat interface, the main "look" shot: deep research with cited sources plus the Agent Workspace panel. |
 | `fit.png` | The hardware-aware model picker: FITS / TIGHT / TOO BIG. |
 | `download.png` | The in-app Hugging Face downloader with the background-download tray. |
+| `og.png` | Social card (1200×630). Copied to `public/og.png` by the build script and referenced from the app's Open Graph metadata. |
 
 ## Regenerate them
 

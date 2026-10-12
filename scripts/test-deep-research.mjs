@@ -6,7 +6,7 @@
  *
  * Usage: node scripts/test-deep-research.mjs [baseUrl]
  */
-const BASE = process.argv[2] || 'http://127.0.0.1:3002';
+const BASE = process.argv[2] || 'http://127.0.0.1:3001';
 
 const jar = new Map();
 function cookieHeader() {

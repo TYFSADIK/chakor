@@ -373,10 +373,11 @@ export async function* streamGoogle(
   let res: Response;
   try {
     res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?key=${apiKey}&alt=sse`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:streamGenerateContent?alt=sse`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // Key goes in a header, not the query string — URLs end up in logs.
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
         body: JSON.stringify({
           system_instruction: { parts: [{ text: system }] },
           contents,

@@ -26,6 +26,9 @@ const execAsync = promisify(exec);
 
 export type SupervisorMode = 'managed' | 'external' | 'down' | 'off';
 
+/** Why the model failed to launch, classified from llama-server's own stderr. */
+export type FailureKind = 'unknown_arch' | 'out_of_memory' | 'corrupt_model' | 'spawn_error' | 'unknown';
+
 export interface SupervisorStatus {
   enabled: boolean;
   /** We spawned and own the child process. */
@@ -34,9 +37,11 @@ export interface SupervisorStatus {
   pid: number | null;
   restarts: number;
   lastError: string | null;
+  /** Typed reason for lastError, so the UI can show targeted advice. */
+  failureKind: FailureKind | null;
   model: string | null;
   ctx: number | null;
-  /** We gave up relaunching after the model kept crashing (likely too big). */
+  /** We gave up relaunching after the model kept crashing. */
   crashed: boolean;
 }
 
@@ -46,6 +51,20 @@ export interface SwitchConfig {
   mmproj?: string;
 }
 
+/**
+ * Diagnose a crash from llama-server's stderr output. The exit code alone says
+ * nothing; the actual cause (unsupported architecture, OOM, corrupt file) is
+ * only ever printed to stderr before the process dies. Exported (pure) so the
+ * classification can be unit-tested against sample stderr tails.
+ */
+export function classifyFailureText(text: string): FailureKind {
+  const t = text.toLowerCase();
+  if (/unknown model architecture|unsupported.*architecture|architecture.*not supported/.test(t)) return 'unknown_arch';
+  if (/out of memory|failed to alloc|cannot allocate|insufficient memory|std::bad_alloc|\boom\b/.test(t)) return 'out_of_memory';
+  if (/corrupt|truncat|bad magic|invalid magic|not a valid|incomplete file|unexpected end of file/.test(t)) return 'corrupt_model';
+  return 'unknown';
+}
+
 class LlamaSupervisor {
   private child: ChildProcess | null = null;
   private owns = false;            // did we launch it (vs. adopting an external one)
@@ -53,12 +72,18 @@ class LlamaSupervisor {
   private intentionalStop = false;
   private restarts = 0;
   private lastError: string | null = null;
+  private failureKind: FailureKind | null = null;
   private model: string | null = null;
   private ctx: number | null = null;
   private backoff = 1000;
   private crashed = false;          // gave up after too many fast crashes
   private fastCrashes = 0;          // consecutive crashes that died almost immediately
   private lastSpawnAt = 0;
+  // Ring buffer of llama-server's last stderr lines. Crash exit codes alone are
+  // useless ("code=1"); the real reason (unknown architecture, OOM, corrupt
+  // file) is only ever printed to stderr, so keep it for diagnosis.
+  private stderrTail: string[] = [];
+  private static readonly STDERR_TAIL_LINES = 50;
 
   // A model that's too big for the machine makes llama-server die within a second
   // or two of launch, every time. Without a cap the supervisor would respawn it
@@ -104,6 +129,7 @@ class LlamaSupervisor {
     if (this.starting || this.child) return;
     this.starting = true;
     this.lastError = null;
+    this.failureKind = null;
     try {
       const bin = resolveLlamaBin();
       const cfg = await readRuntimeEnv();
@@ -121,9 +147,13 @@ class LlamaSupervisor {
       this.model = model;
       this.ctx = ctx;
       this.lastSpawnAt = Date.now();
+      this.stderrTail = [];
 
       child.stdout?.on('data', (d) => process.stdout.write(`[llama] ${d}`));
-      child.stderr?.on('data', (d) => process.stderr.write(`[llama] ${d}`));
+      child.stderr?.on('data', (d) => {
+        process.stderr.write(`[llama] ${d}`);
+        this.pushStderr(String(d));
+      });
       child.on('spawn', () => { this.restarts++; });
       child.on('error', (e) => {
         // Spawn failure (binary missing, not executable). No 'exit' event follows
@@ -131,6 +161,7 @@ class LlamaSupervisor {
         // running:true forever. Treat it like an instant crash.
         this.child = null;
         this.fastCrashes++;
+        this.failureKind = 'spawn_error';
         this.handleUnexpectedDeath(`llama-server failed to start (${e.message})`);
       });
       child.on('exit', (code, signal) => {
@@ -159,15 +190,52 @@ class LlamaSupervisor {
     }
   }
 
+  /** Append a chunk of child stderr to the ring buffer (last ~50 lines kept). */
+  private pushStderr(chunk: string): void {
+    for (const line of chunk.split('\n')) {
+      const t = line.trim();
+      if (t) this.stderrTail.push(t);
+    }
+    const overflow = this.stderrTail.length - LlamaSupervisor.STDERR_TAIL_LINES;
+    if (overflow > 0) this.stderrTail.splice(0, overflow);
+  }
+
+  /**
+   * Diagnose a crash from llama-server's stderr tail. The exit code alone says
+   * nothing; the actual cause (unsupported architecture, OOM, corrupt file) is
+   * only ever printed to stderr before the process dies.
+   */
+  private classifyFailure(detail: string): FailureKind {
+    if (this.failureKind === 'spawn_error') return 'spawn_error';
+    return classifyFailureText(`${detail}\n${this.stderrTail.join('\n')}`);
+  }
+
   /** Crash accounting shared by the exit and spawn-error paths. */
   private handleUnexpectedDeath(detail: string): void {
+    this.failureKind = this.classifyFailure(detail);
     if (this.fastCrashes >= this.maxFastCrashes) {
-      // Stop the runaway loop and say something the user can act on.
+      // Stop the runaway loop and say something the user can act on — the real
+      // reason, not the blanket "model is probably too large".
       this.crashed = true;
       const name = this.model ? this.model.split('/').pop() : 'the model';
+      const why: Record<FailureKind, string> = {
+        unknown_arch:
+          `This llama.cpp build can't run ${name} — it reports an unknown model architecture. ` +
+          'The file may be too new for this build or not a chat model at all ' +
+          '(e.g. a speculative-decoding drafter). Update llama.cpp or pick a different model.',
+        out_of_memory:
+          `${name} is too large for this machine's memory. ` +
+          'Pick a smaller model in Settings, or switch to Ollama or LM Studio.',
+        corrupt_model:
+          `${name} looks corrupt or truncated — llama-server rejected the file itself. ` +
+          'Delete it and download it again (a re-download now verifies size and checksum).',
+        spawn_error:
+          'llama-server failed to start at all. Check that the binary exists and is executable.',
+        unknown:
+          `${name} keeps crashing. Pick a smaller model in Settings, or switch to Ollama or LM Studio.`,
+      };
       this.lastError =
-        `llama-server crashed ${this.fastCrashes} times in a row. ${name} is probably too large ` +
-        `for this machine's memory. Pick a smaller model in Settings, or switch to Ollama or LM Studio. ` +
+        `llama-server crashed ${this.fastCrashes} times in a row. ${why[this.failureKind]} ` +
         `(last error: ${detail})`;
       return;
     }
@@ -247,6 +315,7 @@ class LlamaSupervisor {
       pid: this.child?.pid ?? null,
       restarts: this.restarts,
       lastError: this.lastError,
+      failureKind: this.failureKind,
       model: this.model,
       ctx: this.ctx,
       crashed: this.crashed,

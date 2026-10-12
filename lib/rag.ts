@@ -10,8 +10,13 @@ export async function extractText(buffer: Buffer, mimeType: string, filename: st
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { PDFParse } = (await import('pdf-parse')) as any;
     const parser = new PDFParse({ data: buffer });
-    const result = await parser.getText();
-    return result.text ?? '';
+    try {
+      const result = await parser.getText();
+      return result.text ?? '';
+    } finally {
+      // The parser holds the PDF in memory; release it even when parsing throws.
+      await parser.destroy().catch(() => {});
+    }
   }
   return buffer.toString('utf-8');
 }

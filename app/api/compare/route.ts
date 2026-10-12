@@ -1,8 +1,11 @@
 import { NextRequest } from 'next/server';
 import { auth } from '@/lib/auth';
 import { streamForModel } from '@/lib/dispatch';
-import { getModel, defaultModel } from '@/lib/models';
+import { resolveChatModel } from '@/lib/models';
+import { isAdminSession } from '@/lib/guard';
 import { buildSystemPrompt } from '@/lib/system-prompt';
+import { sseStream } from '@/lib/sse';
+import { logger, errText } from '@/lib/logger';
 import type { ChatMessage } from '@/lib/llama';
 
 /**
@@ -28,35 +31,35 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const model = (modelId ? getModel(modelId) : null) ?? defaultModel();
+  // Non-admins are pinned to the server's default model whatever id they send.
+  const model = resolveChatModel(modelId, isAdminSession(session));
   const system = buildSystemPrompt();
   const messages: ChatMessage[] = [
     { role: 'system', content: system },
     { role: 'user', content: prompt },
   ];
 
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    async start(controller) {
-      const send = (obj: Record<string, unknown>) =>
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
-      try {
-        const deltas = streamForModel({
-          modelId: model.id,
-          messages,
-          system,
-          signal: req.signal,
-          onStats: (s) => send({ stats: s }),
-        });
-        for await (const d of deltas) send({ delta: d });
-      } catch (err: unknown) {
-        const isAbort = err instanceof Error && (err.name === 'AbortError' || err.message.includes('aborted'));
-        if (!isAbort) send({ error: err instanceof Error ? err.message : String(err) });
-      } finally {
-        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-        controller.close();
+  const stream = sseStream(async (sink) => {
+    try {
+      const deltas = streamForModel({
+        modelId: model.id,
+        messages,
+        system,
+        signal: req.signal,
+        onStats: (s) => sink.send({ stats: s }),
+      });
+      for await (const d of deltas) {
+        if (!sink.send({ delta: d })) break;
       }
-    },
+    } catch (err: unknown) {
+      const isAbort = err instanceof Error && (err.name === 'AbortError' || err.message.includes('aborted'));
+      if (!isAbort) {
+        // Raw provider errors can contain internal endpoints and paths — log
+        // the detail, send the client a generic message.
+        logger.error('compare stream failed', { model: model.id, provider: model.provider, err: errText(err) });
+        sink.send({ error: 'The model failed to respond. Please try again or switch models.' });
+      }
+    }
   });
 
   return new Response(stream, {

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import type { Session } from 'next-auth';
-import { liveProps, scanLocalModels, readRuntimeEnv, writeRuntimeEnv, findMmproj } from '@/lib/local-llama';
+import { liveProps, scanLocalModels, readRuntimeEnv, writeRuntimeEnv, findMmproj, waitForHealthy } from '@/lib/local-llama';
 import { llamaSupervisor, type SupervisorMode } from '@/lib/llama-supervisor';
 
 function isAdmin(session: Session | null): boolean {
@@ -18,26 +18,18 @@ function modeOf(managing: boolean, enabled: boolean, online: boolean): Superviso
 }
 
 /**
- * GET: status of the local model. Any signed-in user gets the live model name +
- * context (shown in the chat header). Admins also get the switchable GGUF files
- * and whether Chakor is supervising the server itself.
+ * GET: status of the local model. Admin only — the live status carries the
+ * real model file name, which non-admins must never see. The non-admin UI
+ * treats a 403 as "no live info" and falls back to the static model config.
  */
 export async function GET() {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  if (!isAdmin(session)) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
 
   const live = await liveProps();
   const st = llamaSupervisor.status();
   const mode = modeOf(st.managing, st.enabled, live.online);
-
-  if (!isAdmin(session)) {
-    return NextResponse.json({
-      live: { online: live.online, modelName: live.modelName, nCtx: live.nCtx, vision: live.vision },
-      managed: st.managing,
-      mode,
-      isAdmin: false,
-    });
-  }
 
   const [available, runtime] = await Promise.all([scanLocalModels(live.modelPath), readRuntimeEnv()]);
   return NextResponse.json({
@@ -45,7 +37,7 @@ export async function GET() {
     available,
     managed: st.managing,
     mode,
-    supervisor: { running: st.running, lastError: st.lastError, restarts: st.restarts },
+    supervisor: { running: st.running, lastError: st.lastError, failureKind: st.failureKind, restarts: st.restarts },
     runtime,
     isAdmin: true,
   });
@@ -93,6 +85,13 @@ export async function POST(req: NextRequest) {
     const mmproj = (await findMmproj(model)) ?? '';
     const r = await llamaSupervisor.restart({ model, ctx, mmproj });
     if (!r.ok) return NextResponse.json({ error: r.error ?? 'restart failed', mode: 'managed' }, { status: 502 });
+    // restart() resolves at spawn; large GGUFs answer 503 until the model is
+    // actually loaded. Wait for real health so "applied" means usable — if it
+    // is still loading, report 'starting' so the UI can poll GET for readiness.
+    const healthy = await waitForHealthy();
+    if (!healthy) {
+      return NextResponse.json({ ok: true, applied: false, starting: true, managed: true, mode: 'managed', model, ctx });
+    }
     return NextResponse.json({ ok: true, applied: true, managed: true, mode: 'managed', model, ctx });
   }
 

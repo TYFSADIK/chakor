@@ -7,12 +7,14 @@
  * workspace always maps 1:1 to a conversation the user owns.
  */
 
-import { NextRequest } from "next/server";
-import { auth } from "@/lib/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { requireUser, isAdminSession } from "@/lib/guard";
+import { sseStream } from "@/lib/sse";
 import { getConversation, createConversation } from "@/lib/db";
 import { runAgent } from "@/lib/agent-executor";
 import { streamForModel } from "@/lib/dispatch";
-import { getModel, defaultModel } from "@/lib/models";
+import { resolveChatModel } from "@/lib/models";
+import { trackChatStart, trackChatEnd } from "@/lib/backends";
 import { logger, errText } from "@/lib/logger";
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
@@ -28,14 +30,9 @@ const bodySchema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user) {
-    return new Response(JSON.stringify({ error: "unauthorized" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
-  const userId = (session.user as unknown as { id: number }).id;
+  const authd = await requireUser();
+  if (authd instanceof NextResponse) return authd;
+  const { session, userId } = authd;
 
   const raw = await req.json().catch(() => null);
   const parsed = bodySchema.safeParse(raw);
@@ -64,7 +61,8 @@ export async function POST(req: NextRequest) {
     isNew = true;
   }
 
-  const model = (modelId ? getModel(modelId) : null) ?? defaultModel();
+  // Non-admins are pinned to the server's default model whatever id they send.
+  const model = resolveChatModel(modelId, isAdminSession(session));
 
   const workspaceDir = path.join(process.cwd(), "data", "workspaces", convId);
   fs.mkdirSync(workspaceDir, { recursive: true });
@@ -85,28 +83,31 @@ export async function POST(req: NextRequest) {
       signal: req.signal,
     });
 
-  const encoder = new TextEncoder();
-  const stream = new ReadableStream({
-    async start(controller) {
-      const send = (data: unknown) => {
-        controller.enqueue(encoder.encode("data: " + JSON.stringify(data) + "\n\n"));
-      };
-      try {
-        for await (const event of runAgent(
-          { workspaceDir, model, dispatch: dispatchAdapter },
-          message
-        )) {
-          send(event);
-        }
-      } catch (e) {
-        logger.error("agent execute failed", { convId, err: errText(e) });
-        send({ type: "error", message: "The agent stopped unexpectedly. Please try again." });
-      } finally {
-        controller.enqueue(encoder.encode("data: [DONE]\n\n"));
-        controller.close();
+  // Register this run so engine switching never evicts the backend mid-run
+  // (the agent streams through the same engines as chat).
+  trackChatStart();
+  let trackEnded = false;
+  const endTracking = () => {
+    if (trackEnded) return;
+    trackEnded = true;
+    trackChatEnd();
+  };
+
+  const stream = sseStream(async (sink) => {
+    try {
+      for await (const event of runAgent(
+        { workspaceDir, model, dispatch: dispatchAdapter },
+        message
+      )) {
+        if (!sink.send(event as Record<string, unknown>)) break;
       }
-    },
-  });
+    } catch (e) {
+      logger.error("agent execute failed", { convId, err: errText(e) });
+      sink.send({ type: "error", message: "The agent stopped unexpectedly. Please try again." });
+    } finally {
+      endTracking();
+    }
+  }, endTracking);
 
   return new Response(stream, {
     headers: {

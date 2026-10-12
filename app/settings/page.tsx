@@ -84,11 +84,16 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 export default function SettingsPage() {
-  const { data: session, status } = useSession();
+  const { data: session, status, update: updateSession } = useSession();
   const router = useRouter();
 
   const [tab, setTab] = useState<Tab>('profile');
   const [toast, setToast] = useState<{ msg: string; ok: boolean } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // switchLocal polls while the model server restarts; this stops the loop if
+  // the page unmounts mid-switch.
+  const mountedRef = useRef(true);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; if (toastTimer.current) clearTimeout(toastTimer.current); }; }, []);
   const [displayName, setDisplayName] = useState('');
   const [currentPw, setCurrentPw] = useState('');
   const [newPw, setNewPw] = useState('');
@@ -210,7 +215,13 @@ export default function SettingsPage() {
   }
   if (!session) return null;
 
-  function notify(msg: string, ok = true) { setToast({ msg, ok }); setTimeout(() => setToast(null), 3500); }
+  function notify(msg: string, ok = true) {
+    // Keep the timeout in a ref: rapid successive toasts must not be cleared
+    // early by the previous toast's timer.
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ msg, ok });
+    toastTimer.current = setTimeout(() => setToast(null), 3500);
+  }
 
   // Morning / Midnight edition: flip the dark class on <html> and remember it.
   function setEdition(next: 'light' | 'dark') {
@@ -231,7 +242,11 @@ export default function SettingsPage() {
     try {
       const r = await fetch('/api/user/profile', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ displayName: displayName.trim() }) });
       const d = await r.json();
-      if (r.ok) notify('Display name updated'); else notify(d.error, false);
+      if (r.ok) {
+        // Refresh the session so the new name propagates everywhere immediately.
+        await updateSession().catch(() => {});
+        notify('Display name updated');
+      } else notify(d.error, false);
     } catch { notify('Network error', false); }
     finally { setSavingName(false); }
   }
@@ -268,7 +283,12 @@ export default function SettingsPage() {
   async function deleteKey(id: number) {
     if (!window.confirm('Revoke this API key? Apps using it will stop working.')) return;
     try {
-      await fetch(`/api/user/keys/${id}`, { method: 'DELETE' });
+      const r = await fetch(`/api/user/keys/${id}`, { method: 'DELETE' });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        notify(d.error ?? 'Could not revoke the key, it is still active', false);
+        return; // keep the key in the list — it was not revoked
+      }
       setKeys(k => k.filter(x => x.id !== id));
       notify('API key revoked');
     } catch { notify('Network error', false); }
@@ -429,13 +449,17 @@ export default function SettingsPage() {
       if (!d.managed) { notify('Saved. Consolidate to one service to apply it.', false); await loadLocal(); return; }
 
       // Give the server a beat to go down, then poll /props until it's back.
+      // Bail out quietly if the settings page unmounts mid-restart.
       await new Promise(res => setTimeout(res, 1500));
       const deadline = Date.now() + 90_000;
       while (Date.now() < deadline) {
+        if (!mountedRef.current) return;
         await new Promise(res => setTimeout(res, 2000));
+        if (!mountedRef.current) return;
         try {
           const sr = await fetch('/api/models/local');
           if (!sr.ok) continue;
+          if (!mountedRef.current) return;
           const s: LocalStatus = await sr.json();
           setLocal(s);
           const okModel = !opts.model || (s.live.modelPath ?? '') === opts.model;
@@ -445,7 +469,7 @@ export default function SettingsPage() {
       }
       notify('Server is taking a while to come back, check status above.', false);
     } catch { notify('Network error', false); }
-    finally { setSwitching(false); setSwitchMsg(''); loadSystem(); }
+    finally { if (mountedRef.current) { setSwitching(false); setSwitchMsg(''); loadSystem(); } }
   }
 
   // Fit verdict + recommendation come from /api/system, keyed by file path.
@@ -471,7 +495,7 @@ export default function SettingsPage() {
 
       {/* Toast */}
       {toast && (
-        <div className="toast" style={{
+        <div className="toast" role="status" aria-live="polite" style={{
           position: 'fixed', top: 20, right: 20, zIndex: 9999,
           display: 'flex', alignItems: 'center', gap: 10,
           padding: '11px 16px',

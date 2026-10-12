@@ -8,10 +8,12 @@ function isAdmin(session: Session | null): boolean {
 }
 
 // GET: which Ollama models are currently loaded in memory (like `ollama ps`).
-// Any signed-in user can see this, it is read-only status.
+// Admin only — the loaded list is made of real model names, which non-admins
+// must never see.
 export async function GET() {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  if (!isAdmin(session)) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
 
   try {
     const res = await fetch(`${OLLAMA_BASE_URL}/api/ps`, { signal: AbortSignal.timeout(2500) });

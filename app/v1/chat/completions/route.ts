@@ -22,7 +22,11 @@ function err(message: string, status: number) {
 }
 
 export async function POST(req: NextRequest) {
-  if (!authenticateApiKey(req)) return err('Invalid API key', 401);
+  const user = authenticateApiKey(req);
+  if (!user) return err('Invalid API key', 401);
+  // Non-admin keys are pinned to the server's default model and only ever see
+  // the masked "chakor" id, so they can't select or probe specific real models.
+  const admin = user.is_admin === 1;
 
   const body = await req.json().catch(() => null);
   if (!body || !Array.isArray(body.messages)) return err('messages array required', 400);
@@ -49,7 +53,7 @@ export async function POST(req: NextRequest) {
   }
   if (totalChars > MAX_TOTAL_CHARS) return err(`total message content too large (max ${MAX_TOTAL_CHARS} chars)`, 400);
 
-  const modelId: string | undefined = body.model;
+  const modelId: string | undefined = admin ? body.model : undefined;
   const wantStream = body.stream === true;
 
   // Pull out a system message if the caller sent one (Anthropic/Google need it

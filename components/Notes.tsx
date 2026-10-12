@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 
 type Item = { text: string; done: boolean };
 type Note = {
@@ -113,6 +114,8 @@ export default function Notes({ initialNotes }: { initialNotes: Note[] }) {
     else fields.body = buf.body.trim();
     if (await patch(editing.id, fields)) setEditing(null);
   }
+  // Focus trap + Escape-to-save for the edit dialog.
+  const editTrapRef = useFocusTrap<HTMLDivElement>(!!editing, () => { void saveEdit(); });
 
   const visible = notes.filter((n) => (showArchived ? n.archived : !n.archived));
   const pinned = visible.filter((n) => n.pinned);
@@ -224,7 +227,7 @@ export default function Notes({ initialNotes }: { initialNotes: Note[] }) {
       {editing && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
           <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.55)' }} onClick={saveEdit} />
-          <div className="anim-scale-in" style={{ position: 'relative', zIndex: 1, width: '100%', maxWidth: 540, maxHeight: '85vh', display: 'flex', flexDirection: 'column', background: colorOf(buf.color).bg, border: `1px solid ${colorOf(buf.color).bd}`, borderTop: '3px double var(--fg)', borderRadius: 0, boxShadow: 'var(--sh-lg)' }}>
+          <div ref={editTrapRef} role="dialog" aria-modal="true" aria-label="Edit note" className="anim-scale-in" style={{ position: 'relative', zIndex: 1, width: '100%', maxWidth: 540, maxHeight: '85vh', display: 'flex', flexDirection: 'column', background: colorOf(buf.color).bg, border: `1px solid ${colorOf(buf.color).bd}`, borderTop: '3px double var(--fg)', borderRadius: 0, boxShadow: 'var(--sh-lg)' }}>
             <div style={{ padding: '16px 18px 10px', overflowY: 'auto' }}>
               <input value={buf.title} onChange={(e) => setBuf((b) => ({ ...b, title: e.target.value }))} placeholder="Headline"
                 className="font-display"

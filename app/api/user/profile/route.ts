@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { requireUser } from '@/lib/guard';
 import { updateDisplayName } from '@/lib/db';
 
 export async function PATCH(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  const userId = (session.user as unknown as { id: number }).id;
+  const authd = await requireUser();
+  if (authd instanceof NextResponse) return authd;
+  const { userId } = authd;
 
   const body = await req.json().catch(() => null);
   if (!body) return NextResponse.json({ error: 'invalid body' }, { status: 400 });

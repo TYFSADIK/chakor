@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { requireUser } from '@/lib/guard';
 import { getNote, updateNote, deleteNote, type NoteItem } from '@/lib/db';
 
 type Params = { params: Promise<{ id: string }> };
@@ -12,9 +12,9 @@ function cleanItems(raw: unknown): NoteItem[] {
 }
 
 export async function PUT(req: NextRequest, { params }: Params) {
-  const session = await auth();
-  if (!session?.user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  const userId = (session.user as unknown as { id: number }).id;
+  const authd = await requireUser();
+  if (authd instanceof NextResponse) return authd;
+  const { userId } = authd;
   const { id } = await params;
   if (!getNote(id, userId)) return NextResponse.json({ error: 'not found' }, { status: 404 });
 
@@ -32,9 +32,9 @@ export async function PUT(req: NextRequest, { params }: Params) {
 }
 
 export async function DELETE(_req: NextRequest, { params }: Params) {
-  const session = await auth();
-  if (!session?.user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  const userId = (session.user as unknown as { id: number }).id;
+  const authd = await requireUser();
+  if (authd instanceof NextResponse) return authd;
+  const { userId } = authd;
   const { id } = await params;
   deleteNote(id, userId);
   return NextResponse.json({ ok: true });

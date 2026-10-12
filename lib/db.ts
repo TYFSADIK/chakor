@@ -20,6 +20,9 @@ export function db(): Database.Database {
   _db.pragma('journal_mode = WAL');
   _db.pragma('foreign_keys = ON');
   _db.pragma('synchronous = NORMAL');
+  // Wait up to 5s on a locked database instead of failing immediately — WAL
+  // readers/writers from concurrent requests otherwise surface SQLITE_BUSY.
+  _db.pragma('busy_timeout = 5000');
 
   // Bootstrap schema (idempotent)
   _db.exec(`
@@ -168,6 +171,12 @@ export function db(): Database.Database {
     // Last 4 chars of the raw API token, kept for masked display (the token
     // column itself only holds the sha256 hash).
     `ALTER TABLE api_keys ADD COLUMN token_tail TEXT`,
+    // Unix time of the last password change; sessions whose JWT was issued
+    // before this are rejected (lib/auth.ts session callback).
+    `ALTER TABLE users ADD COLUMN password_changed_at INTEGER`,
+    // Research/search sources attached to an assistant message, stored as a
+    // JSON array of {title, url, snippet?} exactly as streamed to the client.
+    `ALTER TABLE messages ADD COLUMN sources TEXT`,
   ];
   for (const sql of migrations) {
     try {
@@ -200,6 +209,8 @@ export interface User {
   password_hash: string;
   created_at: number;
   is_admin: number;
+  display_name?: string | null;
+  password_changed_at?: number | null;
 }
 
 export function getUserByUsername(username: string): User | undefined {
@@ -325,6 +336,10 @@ export function listFolders(userId: number): Folder[] {
   return db().prepare('SELECT * FROM folders WHERE user_id = ? ORDER BY position ASC, id ASC').all(userId) as Folder[];
 }
 
+export function getFolder(id: number, userId: number): Folder | undefined {
+  return db().prepare('SELECT * FROM folders WHERE id = ? AND user_id = ?').get(id, userId) as Folder | undefined;
+}
+
 export function createFolder(userId: number, name: string): Folder {
   const pos = (db().prepare('SELECT COALESCE(MAX(position),0)+1 AS p FROM folders WHERE user_id = ?').get(userId) as { p: number }).p;
   const result = db().prepare('INSERT INTO folders (user_id, name, position) VALUES (?, ?, ?)').run(userId, name, pos);
@@ -345,12 +360,16 @@ export function deleteFolder(id: number, userId: number): void {
 }
 
 // ─── Messages ──────────────────────────────────────────────────────
+/** A web source attached to an assistant reply (search / deep research). */
+export interface MessageSource { title: string; url: string; snippet?: string }
+
 export interface Message {
   id: number;
   conversation_id: string;
   role: 'system' | 'user' | 'assistant';
   content: string;
   images?: string[];
+  sources?: MessageSource[];
   created_at: number;
 }
 
@@ -359,6 +378,21 @@ function parseImages(raw: unknown): string[] | undefined {
   try {
     const arr = JSON.parse(raw);
     return Array.isArray(arr) && arr.length ? (arr as string[]) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseSources(raw: unknown): MessageSource[] | undefined {
+  if (typeof raw !== 'string' || !raw) return undefined;
+  try {
+    const arr = JSON.parse(raw);
+    if (!Array.isArray(arr) || !arr.length) return undefined;
+    // Only keep well-formed entries — a corrupt blob must not break the row.
+    const clean = arr.filter(
+      (s): s is MessageSource => !!s && typeof s.title === 'string' && typeof s.url === 'string',
+    );
+    return clean.length ? clean : undefined;
   } catch {
     return undefined;
   }
@@ -374,8 +408,8 @@ export function listMessages(conversationId: string, limit?: number): Message[] 
         ) ORDER BY created_at ASC, id ASC
       `).all(conversationId, limit)
     : db().prepare('SELECT * FROM messages WHERE conversation_id = ? ORDER BY created_at ASC, id ASC').all(conversationId)
-  ) as Array<Message & { images?: unknown }>;
-  return rows.map((r) => ({ ...r, images: parseImages(r.images) }));
+  ) as Array<Message & { images?: unknown; sources?: unknown }>;
+  return rows.map((r) => ({ ...r, images: parseImages(r.images), sources: parseSources(r.sources) }));
 }
 
 export function addMessage(
@@ -383,10 +417,15 @@ export function addMessage(
   role: Message['role'],
   content: string,
   images?: string[],
+  sources?: MessageSource[],
 ): number {
   const result = db()
-    .prepare('INSERT INTO messages (conversation_id, role, content, images) VALUES (?, ?, ?, ?)')
-    .run(conversationId, role, content, images && images.length ? JSON.stringify(images) : null);
+    .prepare('INSERT INTO messages (conversation_id, role, content, images, sources) VALUES (?, ?, ?, ?, ?)')
+    .run(
+      conversationId, role, content,
+      images && images.length ? JSON.stringify(images) : null,
+      sources && sources.length ? JSON.stringify(sources) : null,
+    );
   touchConversation(conversationId);
   return Number(result.lastInsertRowid);
 }
@@ -469,6 +508,10 @@ export function setShareSlug(convId: string, slug: string): void {
   db().prepare('UPDATE conversations SET share_slug = ? WHERE id = ?').run(slug, convId);
 }
 
+export function clearShareSlug(convId: string, userId: number): void {
+  db().prepare('UPDATE conversations SET share_slug = NULL WHERE id = ? AND user_id = ?').run(convId, userId);
+}
+
 export function getConversationBySlug(slug: string): (Conversation & { share_slug: string }) | undefined {
   return db()
     .prepare('SELECT * FROM conversations WHERE share_slug = ?')
@@ -481,7 +524,9 @@ export function updateDisplayName(userId: number, displayName: string): void {
 }
 
 export function updatePassword(userId: number, passwordHash: string): void {
-  db().prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(passwordHash, userId);
+  db()
+    .prepare("UPDATE users SET password_hash = ?, password_changed_at = strftime('%s', 'now') WHERE id = ?")
+    .run(passwordHash, userId);
 }
 
 // ─── API keys (for the OpenAI-compatible endpoint) ─────────────────

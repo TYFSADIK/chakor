@@ -31,14 +31,37 @@ export interface HfFile {
   quant: string | null;
   /** For a sharded model: every part path. Single-file models omit this. */
   parts?: string[];
+  /** False when llama.cpp can't run this as a chat model — UI should disable it. */
+  runnable: boolean;
+  /** Why it's not runnable (plain language, for a tooltip). */
+  notRunnableReason?: string;
 }
 
-// Files that aren't a runnable chat model on their own.
-const SKIP_RE = /ggml-vocab|tokenizer/i;
+// Files that aren't a runnable chat model on their own, matched by name. They
+// stay in the listing (marked not-runnable) so the UI can show them disabled
+// instead of silently hiding what the user searched for. mmproj files are
+// handled separately (paired with their model), not listed.
+// Name heuristics only: llama-server has no flag to enumerate the architectures
+// a build supports, so we can't verify against the installed binary.
+const NOT_RUNNABLE: Array<[RegExp, string]> = [
+  [/dflash/i, "A speculative-decoding drafter — llama.cpp can't run it as a chat model."],
+  [/draft/i, 'A speculative-decoding draft model, not a standalone chat model.'],
+  [/embed/i, "An embedding model — it turns text into vectors, it doesn't chat."],
+  [/rerank/i, "A reranker — it scores documents, it doesn't chat."],
+  [/vocab|tokenizer/i, 'A tokenizer/vocabulary file, not a model.'],
+];
 const MMPROJ_RE = /mmproj/i;
 // Sharded GGUF parts: "name-00001-of-00003.gguf".
 const SHARD_RE = /^(.*)-(\d{5})-of-(\d{5})\.gguf$/i;
 const QUANT_RE = /\b(IQ\d[\w]*|Q\d[\w]*|F16|FP16|BF16|F32)\b/i;
+// Trailing quant/precision suffix on a GGUF basename, e.g. "-Q4_K_M" or ".f16".
+const QUANT_SUFFIX_RE = /[-_.]?(iq\d[\w]*|q\d[\w]*|f16|fp16|bf16|f32)$/i;
+
+/** Why a file can't run as a chat model, or null when it looks runnable. */
+function notRunnableReason(name: string): string | null {
+  for (const [re, reason] of NOT_RUNNABLE) if (re.test(name)) return reason;
+  return null;
+}
 
 export function hfHeaders(): Record<string, string> {
   // A token lifts rate limits and reaches gated repos. Optional.
@@ -59,8 +82,8 @@ export function sanitizeRepoFile(file: string): string | null {
   const f = (file ?? '').trim().replace(/^\/+/, '');
   if (!f.toLowerCase().endsWith('.gguf')) return null;
   if (f.includes('..') || path.isAbsolute(f)) return null;
-  // Allow a single optional subdirectory (HF quant folders), nothing exotic.
-  if (!/^[\w.-]+(\/[\w.-]+)?$/.test(f)) return null;
+  // Allow up to 3 subdirectory levels (HF quant/shard folders), nothing exotic.
+  if (!/^[\w.-]+(\/[\w.-]+){0,3}$/.test(f)) return null;
   return f;
 }
 
@@ -95,25 +118,28 @@ export async function searchGgufRepos(query: string, limit = 24): Promise<HfRepo
   }
 }
 
-interface TreeEntry { type: string; path: string; size: number }
+interface TreeEntry { type: string; path: string; size: number; sha256: string | null }
 
 async function repoTree(repo: string): Promise<TreeEntry[]> {
   const url = `${HF_API}/models/${repo}/tree/main?recursive=true`;
   const res = await fetch(url, { headers: hfHeaders(), signal: AbortSignal.timeout(8000) });
   if (!res.ok) throw new Error(`Hugging Face ${res.status}`);
-  const data = (await res.json()) as Array<{ type?: string; path?: string; size?: number }>;
+  const data = (await res.json()) as Array<{ type?: string; path?: string; size?: number; lfs?: { oid?: string } }>;
   return data
     .filter((e) => e.type === 'file' && typeof e.path === 'string')
-    .map((e) => ({ type: 'file', path: e.path as string, size: e.size ?? 0 }));
+    // The LFS oid is the file's sha256 — keep it for post-download verification.
+    .map((e) => ({ type: 'file', path: e.path as string, size: e.size ?? 0, sha256: e.lfs?.oid ?? null }));
 }
 
 /**
- * List the runnable GGUF files in a repo, sharded parts collapsed into one
- * entry. Throws on a network/HTTP error so the route can report it.
+ * List the GGUF files in a repo, sharded parts collapsed into one entry. Files
+ * that can't run as chat models (drafters, embedders, rerankers, vocabs) are
+ * included but flagged `runnable: false` so the UI can disable them. Throws on
+ * a network/HTTP error so the route can report it.
  */
 export async function listGgufFiles(repo: string): Promise<HfFile[]> {
   const files = (await repoTree(repo)).filter(
-    (e) => e.path.toLowerCase().endsWith('.gguf') && !SKIP_RE.test(e.path) && !MMPROJ_RE.test(e.path),
+    (e) => e.path.toLowerCase().endsWith('.gguf') && !MMPROJ_RE.test(e.path),
   );
 
   // Collapse sharded parts (name-00001-of-000NN.gguf) under their base name.
@@ -121,6 +147,8 @@ export async function listGgufFiles(repo: string): Promise<HfFile[]> {
   for (const f of files) {
     const base = path.basename(f.path);
     const dir = path.dirname(f.path);
+    const reason = notRunnableReason(base);
+    const flags = reason ? { runnable: false, notRunnableReason: reason } : { runnable: true };
     const shard = SHARD_RE.exec(base);
     if (shard) {
       const key = `${dir}/${shard[1]}`;
@@ -135,10 +163,11 @@ export async function listGgufFiles(repo: string): Promise<HfFile[]> {
           label: `${shard[1]}.gguf`,
           quant: quantFromName(shard[1]),
           parts: [f.path],
+          ...flags,
         });
       }
     } else {
-      groups.set(f.path, { path: f.path, size: f.size, label: base, quant: quantFromName(base) });
+      groups.set(f.path, { path: f.path, size: f.size, label: base, quant: quantFromName(base), ...flags });
     }
   }
 
@@ -150,15 +179,57 @@ export async function listGgufFiles(repo: string): Promise<HfFile[]> {
   return out;
 }
 
+/** Lowercased basename minus the .gguf extension and any trailing quant tag. */
+function fileStem(name: string): string {
+  return path.basename(name).toLowerCase().replace(/\.gguf$/i, '').replace(QUANT_SUFFIX_RE, '');
+}
+
+/**
+ * Pick the mmproj (vision projector) that belongs to a model file, by filename
+ * stem: gemma-4-E2B-it.mmproj.gguf pairs with gemma-4-E2B-it-Q4_K_M.gguf, not
+ * with an unrelated model sharing the folder (~/Downloads holds many). Falls
+ * back to the folder's mmproj only when it's the only candidate.
+ */
+export function matchingMmproj(modelFile: string, candidates: string[]): string | null {
+  if (!candidates.length) return null;
+  const mstem = fileStem(modelFile);
+  const scored = candidates
+    .map((c) => ({
+      c,
+      stem: fileStem(c)
+        .replace(/[-_.]?mmproj[-_.]?/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .replace(QUANT_SUFFIX_RE, ''),
+    }))
+    .filter(({ stem }) => stem.length >= 3 && (mstem.startsWith(stem) || stem.startsWith(mstem)))
+    // Longest stem = most specific match.
+    .sort((a, b) => b.stem.length - a.stem.length);
+  if (scored.length) return scored[0].c;
+  // No stem match: a lone mmproj in the folder almost certainly belongs to it
+  // (e.g. bartowski-style "mmproj-model-f16.gguf" repos).
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+/** One file to pull, with the integrity data the HF tree provides for it. */
+export interface HfDownloadFile {
+  path: string;
+  /** Expected size in bytes (0 when the tree didn't say). */
+  size: number;
+  /** Expected sha256 (the HF LFS oid), null when not available. */
+  sha256: string | null;
+}
+
 /**
  * Given a chosen file path, return every file to actually download: the file
- * itself (or all shards), plus a sibling mmproj if the repo has one (so vision
- * models light up). Re-reads the tree server-side so the client can't ask us to
- * fetch arbitrary files.
+ * itself (or all shards), plus the mmproj sibling that matches this model's
+ * name stem (so vision models light up — and only that one, not every mmproj
+ * in the directory). Re-reads the tree server-side so the client can't ask us
+ * to fetch arbitrary files, and carries expected sizes + sha256s through so the
+ * download manager can verify what it pulled.
  */
-export async function resolveDownloadSet(repo: string, file: string): Promise<{ paths: string[]; totalBytes: number } | null> {
+export async function resolveDownloadSet(repo: string, file: string): Promise<{ paths: string[]; totalBytes: number; files: HfDownloadFile[] } | null> {
   const tree = await repoTree(repo);
-  const byPath = new Map(tree.map((e) => [e.path, e.size]));
+  const byPath = new Map(tree.map((e) => [e.path, e]));
   if (!byPath.has(file)) return null;
 
   const paths: string[] = [];
@@ -177,15 +248,19 @@ export async function resolveDownloadSet(repo: string, file: string): Promise<{ 
     paths.push(file);
   }
 
-  // Add a sibling mmproj (vision projector) if present in the same directory.
-  for (const e of tree) {
-    if (path.dirname(e.path) === dir && MMPROJ_RE.test(path.basename(e.path)) && e.path.toLowerCase().endsWith('.gguf')) {
-      if (!paths.includes(e.path)) paths.push(e.path);
-    }
-  }
+  // Add the matching mmproj (vision projector) if this repo dir has one.
+  const mmprojs = tree
+    .filter((e) => path.dirname(e.path) === dir && MMPROJ_RE.test(path.basename(e.path)) && e.path.toLowerCase().endsWith('.gguf'))
+    .map((e) => e.path);
+  const mm = matchingMmproj(base, mmprojs);
+  if (mm && !paths.includes(mm)) paths.push(mm);
 
-  const totalBytes = paths.reduce((n, p) => n + (byPath.get(p) ?? 0), 0);
-  return { paths, totalBytes };
+  const files = paths.map((p) => {
+    const e = byPath.get(p);
+    return { path: p, size: e?.size ?? 0, sha256: e?.sha256 ?? null };
+  });
+  const totalBytes = files.reduce((n, f) => n + f.size, 0);
+  return { paths, totalBytes, files };
 }
 
 /** The direct download URL for a repo file. */

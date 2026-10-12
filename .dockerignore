@@ -3,6 +3,7 @@ node_modules
 .git
 .claude
 data
+.venv
 *.log
 .env
 .env.local

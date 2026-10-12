@@ -58,6 +58,30 @@ describe('conversations/messages', () => {
   });
 });
 
+describe('message sources (persisted research/search sources)', () => {
+  it('round-trips sources stored on an assistant message', () => {
+    dbm.createConversation('cs1', 1, 'chakor', 'sources');
+    dbm.addMessage('cs1', 'user', 'research this');
+    const sources = [
+      { title: 'Example', url: 'https://example.com/a', snippet: 'a snippet' },
+      { title: 'Other', url: 'https://other.example/b' },
+    ];
+    dbm.addMessage('cs1', 'assistant', 'answer [1]', undefined, sources);
+    const msgs = dbm.listMessages('cs1');
+    expect(msgs[0].sources).toBeUndefined();
+    expect(msgs[1].sources).toEqual(sources);
+  });
+
+  it('drops malformed entries instead of breaking the row', () => {
+    dbm.createConversation('cs2', 1, 'chakor', 'bad sources');
+    dbm.db()
+      .prepare('INSERT INTO messages (conversation_id, role, content, sources) VALUES (?, ?, ?, ?)')
+      .run('cs2', 'assistant', 'raw', JSON.stringify([{ title: 'ok', url: 'https://ok.example' }, { title: 1 }, 'junk']));
+    const msgs = dbm.listMessages('cs2');
+    expect(msgs[0].sources).toEqual([{ title: 'ok', url: 'https://ok.example' }]);
+  });
+});
+
 describe('importConversation (regression: partial import on crash)', () => {
   it('imports atomically', () => {
     dbm.importConversation('imp1', 1, 'chakor', 'imported', [

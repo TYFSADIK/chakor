@@ -8,7 +8,10 @@
 <br/>
 
 <a href="https://github.com/TYFSADIK/chakor/stargazers"><img src="https://img.shields.io/github/stars/TYFSADIK/chakor?style=for-the-badge&color=22c55e&labelColor=0b110e&logo=github" alt="Stars"/></a>
+<img src="https://img.shields.io/badge/version-2.7.0-22c55e?style=for-the-badge&labelColor=0b110e" alt="Version 2.7.0"/>
 <img src="https://img.shields.io/badge/license-MIT-22c55e?style=for-the-badge&labelColor=0b110e" alt="MIT License"/>
+<img src="https://img.shields.io/badge/node-%3E%3D20-22c55e?style=for-the-badge&labelColor=0b110e&logo=nodedotjs" alt="Node 20 or newer"/>
+<img src="https://img.shields.io/badge/docker-compose%20up-22c55e?style=for-the-badge&labelColor=0b110e&logo=docker" alt="Docker"/>
 <img src="https://img.shields.io/badge/self--hosted-100%25-22c55e?style=for-the-badge&labelColor=0b110e" alt="Self-hosted"/>
 <img src="https://img.shields.io/badge/PRs-welcome-22c55e?style=for-the-badge&labelColor=0b110e" alt="PRs welcome"/>
 <img src="https://img.shields.io/badge/built%20with-Next.js%2015-0b110e?style=for-the-badge&labelColor=0b110e&color=334155&logo=nextdotjs" alt="Next.js 15"/>
@@ -33,9 +36,9 @@ Think of it as a lighter, friendlier alternative to Open WebUI, and an open sour
 
 <div align="center">
 
-<img src="docs/preview.png" alt="The Chakor chat interface: sidebar with conversations, folders, Compare, Notes and Memory, a model picker, web search, tool use, and code blocks" width="100%" />
+<img src="docs/preview.png" alt="The Chakor interface: a deep research answer with live pipeline steps and cited source cards, while the Agent Workspace panel on the right builds a slide deck in a sandboxed Python environment" width="100%" />
 
-<sub>One workspace: local and cloud models, web search, tools, documents, compare, notes, and memory.</sub>
+<sub>Deep research with cited sources on the left. A sandboxed agent building real files on the right.</sub>
 
 </div>
 
@@ -77,6 +80,14 @@ Search Hugging Face from inside the app, see every quant with its size and a fit
 
 Flip between llama.cpp, Ollama, and LM Studio in one tap. Chakor unloads the previous model first, so two models never fight for the same VRAM. On a roomy GPU, turn that off and keep several loaded for instant switching.
 
+### An agent that builds real things
+
+Turn on Agent Mode and the chat stops being just answers. The agent plans, searches the web, runs Python in a sandbox, and hands you back actual files: slide decks, Word documents, charts, spreadsheets. Everything lands in a per-conversation workspace you can download from, and the Python side runs with CPU, memory, and filesystem limits so the agent cannot wander off your disk.
+
+### Research that reads the pages, not just the snippets
+
+Deep Research is a pipeline, not a single search. It plans four angles, searches them in parallel, reads the top pages in full, and writes a cited briefing from what it actually read. The whole pipeline streams into the chat as it runs, so you can watch it think.
+
 ## Everything it does
 
 **Models, your way**
@@ -91,8 +102,14 @@ Flip between llama.cpp, Ollama, and LM Studio in one tap. Chakor unloads the pre
 **Knowledge and the web**
 - ✓ Web search built in, on per message, with SearXNG then Brave then DuckDuckGo fallback
 - ✓ Talk to your files: drop in PDFs, text, or markdown and ask questions grounded in them
-- ✓ Real research mode that plans angles, gathers sources, and writes a cited briefing
+- ✓ Deep Research pipeline: plans search angles, reads full pages, and writes a cited briefing from up to 24 sources
 - ✓ Tools and function calling: web search, fetch a URL, a calculator, the current time
+
+**Agent workspace**
+- ✓ Agent Mode: the assistant plans, runs tools in a loop, and produces real files, not just chat text
+- ✓ Sandboxed Python for charts, data crunching, and scripts, with CPU, memory, and path limits
+- ✓ Generates Word documents and PowerPoint decks you can download straight from the workspace panel
+- ✓ Live activity log shows every step the agent takes, in plain language
 
 **More than a chat box**
 - ✓ Compare: run the same prompt across models side by side, blind, vote, and keep a leaderboard
@@ -128,6 +145,8 @@ Both Open WebUI and LM Studio are good. Here is where Chakor is different.
 | Bring your own cloud keys | ✓ | ✓ | limited |
 | Swap local model + context from the UI | ✓ | partial | ✓ |
 | Web search built in | ✓ | ✓ | ✗ |
+| Deep research that reads full pages | ✓ | partial | ✗ |
+| Sandboxed agent that writes files (docx, pptx, charts) | ✓ | ✗ | ✗ |
 | Chat with your documents | ✓ | ✓ | beta |
 | Multi user + admin panel | ✓ | ✓ | ✗ |
 | Blind A/B model compare + leaderboard | ✓ | partial | ✗ |
@@ -137,7 +156,9 @@ Both Open WebUI and LM Studio are good. Here is where Chakor is different.
 
 ## Quick start
 
-Pick whichever fits you. All three end with the app on **http://localhost:3001**. The first account you register becomes the admin.
+Pick whichever fits you. All paths end with the app on **http://localhost:3001**. The first account you register becomes the admin.
+
+**Requirements:** Node.js 20 or newer. Python 3 is needed for the Agent Workspace (the installers set up its virtualenv for you). Everything else — Ollama, llama.cpp, cloud keys — is optional.
 
 > The default `.env` ships with `REGISTRATION_MODE=invite` and `INVITE_CODE=change-me`. For a solo setup, set `REGISTRATION_MODE=open` before you register, or just use the invite code on the register screen. Either way, account number one is the admin.
 
@@ -202,12 +223,23 @@ sudo bash install.sh --yes --service
 
 A few honest notes. The installer never writes permanent passwordless-sudo rules and never runs the app itself as root, so a server that faces the network is not one bug away from owning the whole machine. CUDA is large and version-sensitive, so it is used when the toolkit is already there and otherwise pointed to, not force-installed onto your drivers. LM Studio is a desktop app with no headless installer, so grab it yourself if you want it; Chakor finds it the moment its local server is running.
 
-### Option 3: Manual (for developers)
+### Option 3: setup.sh (already have Node 20+)
+
+The middle path: no system packages installed, just the app. It installs npm dependencies, creates the Python virtualenv the Agent Workspace uses, generates your `AUTH_SECRET`, initializes the database, and builds.
+
+```bash
+git clone https://github.com/TYFSADIK/chakor.git && cd chakor
+bash setup.sh
+npm start
+```
+
+### Option 4: Manual (for developers)
 
 ```bash
 git clone https://github.com/TYFSADIK/chakor.git && cd chakor
 npm install --legacy-peer-deps
 cp .env.example .env.local            # then set AUTH_SECRET (openssl rand -base64 32)
+python3 -m venv .venv && .venv/bin/pip install python-docx python-pptx matplotlib pandas numpy openpyxl Pillow   # optional, for Agent Workspace
 npm run build
 npm start
 ```
@@ -272,13 +304,21 @@ Everything lives in `.env.local`. The ones you will actually touch:
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_AI_API_KEY` | Turn on cloud models. |
 | `OPENROUTER_API_KEY`, `OPENROUTER_MODELS` | One key, many models. List them as `id\|Label`, comma separated. |
 | `SEARXNG_URL`, `BRAVE_SEARCH_API_KEY` | Web search backends. |
+| `CHAKOR_PYTHON`, `CHAKOR_WORKSPACE` | Agent Workspace. Python interpreter for the sandbox (blank = auto-detect `.venv`, then system `python3`) and the root folder workspaces must stay under (blank = `./data/workspaces`). |
+| `TOOLS_ALLOW_PRIVATE` | DANGEROUS. Set `true` only on a fully trusted network to let the fetch tools reach private/LAN addresses. Default blocks them (SSRF protection). |
+| `TRUST_PROXY` | Set `true` only behind a reverse proxy that sets a trusted `x-forwarded-for`, so rate limits apply per real client IP. |
+| `NEXT_PUBLIC_APP_URL` / `CHAKOR_APP_URL` | Public URL of your instance. Used for canonical links, Open Graph, the sitemap, and JSON-LD. Falls back to `AUTH_URL`, then `http://localhost:3001`. |
 | `NEXT_PUBLIC_APP_NAME`, `NEXT_PUBLIC_APP_TAGLINE`, `APP_CREATOR` | Rebrand the app. |
 
 ### Security notes
 
-- Login and registration are rate limited, so hammering them gets nowhere fast.
+- Login and registration are rate limited, so hammering them gets nowhere fast. Login timing is equalized so response time cannot reveal whether a username exists.
 - Every response carries baseline security headers including a Content Security Policy (see `next.config.mjs`).
 - API tokens for the OpenAI-compatible `/v1` API are stored as sha256 hashes. The raw token is shown once and never saved.
+- Registration defaults to invite mode, enforced server-side. Set `REGISTRATION_MODE=closed` to lock the doors entirely.
+- Sessions are invalidated when a password changes or a user is deleted — no waiting for JWT expiry.
+- The fetch tools (web search, URL reads, Deep Research) refuse private, loopback, and link-local addresses, and re-validate every redirect hop against a DNS-resolved blocklist, so web content cannot reach your LAN or cloud metadata endpoints.
+- The Agent Workspace sandbox runs Python with CPU and memory limits, an isolated working directory, and every file path is re-checked against the workspace root — escapes are rejected.
 
 ### Make it yours
 
@@ -323,6 +363,8 @@ Next.js app
   |                  lib/providers.ts          ollama, openai, anthropic, google, openrouter
   |                  lib/llama-supervisor.ts   runs local llama.cpp as a child process
   |                  lib/agent.ts + tools.ts   function calling loop
+  |                  lib/agent-executor.ts     Agent Workspace ReAct loop
+  |                  scripts/sandbox-runner.py sandboxed Python (docx, pptx, charts)
   |                  lib/searxng.ts            web search, with fallbacks
   |                  lib/rag.ts                document retrieval
   |
@@ -371,6 +413,17 @@ Already had the old two service setup (a separate llama server)? Run `scripts/us
 | Search finds nothing | Turn on `json` format in SearXNG, or set `BRAVE_SEARCH_API_KEY`. |
 | Cannot sign in after first run | First account registered is the admin. Check `REGISTRATION_MODE` and `INVITE_CODE`. |
 
+## What's next
+
+A few directions being explored, in no particular order and with no promises:
+
+- Voice input and output for local models
+- More agent tools: spreadsheet editing, image generation backends, scheduled tasks
+- Shared workspaces for multi-user setups
+- Deeper vision support across more local model families
+
+Want one of these sooner, or have a better idea? Open an issue.
+
 ## Contributing
 
 Pull requests are welcome. Keep the voice human (no emoji, no em dashes), run `npm run build` before you open one, and see [CONTRIBUTING.md](CONTRIBUTING.md) for the rest.
@@ -396,7 +449,7 @@ Run it on your laptop. Run it on a server. Run it on your old phone in a drawer.
 <br/>
 <br/>
 
-**Built for people who would rather run their own tools.**
+**Built by [tyfsadik](https://github.com/TYFSADIK), for people who would rather run their own tools.**
 
 <sub>No cloud · No tracking · No big tech · <a href="#top">back to top</a></sub>
 

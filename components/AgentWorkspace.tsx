@@ -12,7 +12,7 @@ import { useState, useEffect, useCallback, useRef, useImperativeHandle } from 'r
 
 export interface AgentWorkspaceHandle {
   /** Run the agent on a message. Resolves when the run ends; onFinal receives the final answer text. */
-  runAgent: (message: string, onFinal?: (answer: string) => void) => Promise<void>;
+  runAgent: (message: string, onFinal?: (answer: string) => void, signal?: AbortSignal) => Promise<void>;
   isRunning: () => boolean;
 }
 
@@ -111,7 +111,7 @@ export default function AgentWorkspace({
     setLogs((prev) => [...prev, { ...entry, id: `log-${++logSeq}`, ts: Date.now() }]);
   }, []);
 
-  const runAgent = useCallback(async (message: string, onFinal?: (answer: string) => void) => {
+  const runAgent = useCallback(async (message: string, onFinal?: (answer: string) => void, signal?: AbortSignal) => {
     if (runningRef.current) return;
     runningRef.current = true;
     setIsRunning(true);
@@ -123,6 +123,7 @@ export default function AgentWorkspace({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ conversationId: conversationId ?? undefined, message }),
+        signal: signal ?? null,
       });
 
       const newConv = res.headers.get('X-New-Conversation') === '1'
@@ -138,63 +139,79 @@ export default function AgentWorkspace({
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
-
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split('\n\n');
-        buffer = events.pop() ?? '';
-
-        for (const evt of events) {
-          const line = evt.trim();
-          if (!line.startsWith('data:')) continue;
-          const data = line.slice(5).trim();
-          if (data === '[DONE]') continue;
-          try {
-            const event = JSON.parse(data);
-            switch (event.type) {
-              case 'status': {
-                const m = /step (\d+)/.exec(event.message ?? '');
-                if (m) setStep(Number(m[1]));
-                break; // status is shown in the status bar, not the log
-              }
-              case 'thought':
-                addLog({ kind: 'thought', message: String(event.content).slice(0, 300) });
-                break;
-              case 'tool_call':
-                addLog({
-                  kind: 'tool_call',
-                  message: `${TOOL_LABELS[event.tool] ?? event.tool}...`,
-                  detail: JSON.stringify(event.arguments, null, 2).slice(0, 1500),
-                });
-                break;
-              case 'tool_result': {
-                const failed = event.result && typeof event.result === 'object'
-                  && ('error' in event.result || (typeof event.result.returncode === 'number' && event.result.returncode !== 0));
-                addLog({
-                  kind: failed ? 'error' : 'tool_result',
-                  ok: !failed,
-                  message: failed
-                    ? `${TOOL_LABELS[event.tool] ?? event.tool} hit a problem. The agent will try to recover.`
-                    : `${TOOL_LABELS[event.tool] ?? event.tool} finished.`,
-                  detail: JSON.stringify(event.result, null, 2).slice(0, 2000),
-                });
-                break;
-              }
-              case 'error':
-                addLog({ kind: 'error', message: `${event.message}` });
-                break;
-              case 'final_answer':
-                addLog({ kind: 'final_answer', message: 'Done! The answer is in the chat.' });
-                onFinal?.(String(event.content ?? ''));
-                break;
-            }
-          } catch { /* malformed SSE line; skip */ }
-        }
+      // Stop reading the moment the caller aborts instead of waiting for the
+      // server to notice the closed socket.
+      const cancelOnAbort = () => { reader.cancel().catch(() => {}); };
+      if (signal) {
+        if (signal.aborted) cancelOnAbort();
+        else signal.addEventListener('abort', cancelOnAbort, { once: true });
       }
-    } catch {
-      addLog({ kind: 'error', message: 'The connection to the agent was lost. Check that the app is still running, then try again.' });
+
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split('\n\n');
+          buffer = events.pop() ?? '';
+
+          for (const evt of events) {
+            const line = evt.trim();
+            if (!line.startsWith('data:')) continue;
+            const data = line.slice(5).trim();
+            if (data === '[DONE]') continue;
+            try {
+              const event = JSON.parse(data);
+              switch (event.type) {
+                case 'status': {
+                  const m = /step (\d+)/.exec(event.message ?? '');
+                  if (m) setStep(Number(m[1]));
+                  break; // status is shown in the status bar, not the log
+                }
+                case 'thought':
+                  addLog({ kind: 'thought', message: String(event.content).slice(0, 300) });
+                  break;
+                case 'tool_call':
+                  addLog({
+                    kind: 'tool_call',
+                    message: `${TOOL_LABELS[event.tool] ?? event.tool}...`,
+                    detail: JSON.stringify(event.arguments, null, 2).slice(0, 1500),
+                  });
+                  break;
+                case 'tool_result': {
+                  const failed = event.result && typeof event.result === 'object'
+                    && ('error' in event.result || (typeof event.result.returncode === 'number' && event.result.returncode !== 0));
+                  addLog({
+                    kind: failed ? 'error' : 'tool_result',
+                    ok: !failed,
+                    message: failed
+                      ? `${TOOL_LABELS[event.tool] ?? event.tool} hit a problem. The agent will try to recover.`
+                      : `${TOOL_LABELS[event.tool] ?? event.tool} finished.`,
+                    detail: JSON.stringify(event.result, null, 2).slice(0, 2000),
+                  });
+                  break;
+                }
+                case 'error':
+                  addLog({ kind: 'error', message: `${event.message}` });
+                  break;
+                case 'final_answer':
+                  addLog({ kind: 'final_answer', message: 'Done! The answer is in the chat.' });
+                  onFinal?.(String(event.content ?? ''));
+                  break;
+              }
+            } catch { /* malformed SSE line; skip */ }
+          }
+        }
+      } finally {
+        signal?.removeEventListener('abort', cancelOnAbort);
+      }
+      if (signal?.aborted) addLog({ kind: 'status', message: 'Stopped by you.' });
+    } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') {
+        addLog({ kind: 'status', message: 'Stopped by you.' });
+      } else {
+        addLog({ kind: 'error', message: 'The connection to the agent was lost. Check that the app is still running, then try again.' });
+      }
     } finally {
       runningRef.current = false;
       setIsRunning(false);
@@ -203,7 +220,7 @@ export default function AgentWorkspace({
   }, [conversationId, addLog, fetchFiles, onNewConversation]);
 
   useImperativeHandle(ref, () => ({
-    runAgent: (message: string, onFinal?: (answer: string) => void) => runAgent(message, onFinal),
+    runAgent: (message: string, onFinal?: (answer: string) => void, signal?: AbortSignal) => runAgent(message, onFinal, signal),
     isRunning: () => runningRef.current,
   }), [runAgent]);
 

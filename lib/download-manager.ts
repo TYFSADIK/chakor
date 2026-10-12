@@ -7,7 +7,8 @@
  *
  * Server-only. Routes call start()/list()/cancel(); they never do the I/O.
  */
-import { createWriteStream, promises as fs } from 'node:fs';
+import { createWriteStream, createReadStream, promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { primaryModelsDir } from './local-llama';
 import { idleWatchdog } from './llama';
@@ -17,9 +18,12 @@ import {
   resolveFileUrl,
   repoFolderName,
   hfHeaders,
+  type HfDownloadFile,
 } from './huggingface';
 
 export type DownloadStatus = 'downloading' | 'done' | 'error' | 'cancelled';
+/** downloading = bytes streaming; verifying = post-download size/sha256 check. */
+export type DownloadPhase = 'downloading' | 'verifying';
 
 export interface DownloadJob {
   id: string;
@@ -27,6 +31,7 @@ export interface DownloadJob {
   file: string;
   name: string;            // pretty file name being saved
   status: DownloadStatus;
+  phase: DownloadPhase;    // what the job is doing right now (for the UI)
   total: number;           // bytes
   downloaded: number;      // bytes
   pct: number;             // 0..100
@@ -42,6 +47,8 @@ interface JobInternal extends DownloadJob {
   abort: AbortController;
   destDir: string;
   paths: string[];
+  /** Expected size + sha256 per repo path, from the HF tree. */
+  files: HfDownloadFile[];
   lastBytes: number;
   lastAt: number;
 }
@@ -49,6 +56,45 @@ interface JobInternal extends DownloadJob {
 const MMPROJ_RE = /mmproj/i;
 const KEEP_FINISHED_MS = 10 * 60 * 1000; // show completed/failed jobs for 10 min
 const STALL_MS = 60_000; // fail a download that delivers no bytes for 60s
+
+/** The bytes on disk don't match what Hugging Face said the file should be. */
+export class IntegrityError extends Error {}
+
+/** Streamed sha256 of a file — fine even for multi-GB GGUFs. */
+function sha256File(p: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash('sha256');
+    const rs = createReadStream(p);
+    rs.on('data', (d) => hash.update(d));
+    rs.on('end', () => resolve(hash.digest('hex')));
+    rs.on('error', reject);
+  });
+}
+
+/**
+ * Check a finished file against what the HF tree promised: size always (when
+ * known), sha256 when the repo provides it (streamed, so multi-GB is fine).
+ * A mismatch deletes the bad file and throws IntegrityError so the caller
+ * refetches instead of leaving a corrupt model on disk.
+ */
+export async function verifyFileIntegrity(
+  filePath: string,
+  name: string,
+  exp: { size: number; sha256: string | null },
+): Promise<void> {
+  const st = await fs.stat(filePath);
+  if (exp.size > 0 && st.size !== exp.size) {
+    await fs.rm(filePath, { force: true });
+    throw new IntegrityError(`${name}: size mismatch (got ${st.size}, expected ${exp.size})`);
+  }
+  if (exp.sha256) {
+    const digest = await sha256File(filePath);
+    if (digest !== exp.sha256.toLowerCase()) {
+      await fs.rm(filePath, { force: true });
+      throw new IntegrityError(`${name}: sha256 mismatch — the download was corrupt`);
+    }
+  }
+}
 
 class DownloadManager {
   private jobs = new Map<string, JobInternal>();
@@ -61,7 +107,7 @@ class DownloadManager {
       if (j.repo === repo && j.file === file && j.status === 'downloading') return { id: j.id };
     }
 
-    let set: { paths: string[]; totalBytes: number } | null;
+    let set: { paths: string[]; totalBytes: number; files: HfDownloadFile[] } | null;
     try {
       set = await resolveDownloadSet(repo, file);
     } catch (e) {
@@ -77,6 +123,7 @@ class DownloadManager {
       id, repo, file,
       name: path.basename(mainRepoFile),
       status: 'downloading',
+      phase: 'downloading',
       total: set.totalBytes,
       downloaded: 0,
       pct: 0,
@@ -89,6 +136,7 @@ class DownloadManager {
       abort: new AbortController(),
       destDir,
       paths: set.paths,
+      files: set.files,
       lastBytes: 0,
       lastAt: Date.now(),
     };
@@ -110,6 +158,55 @@ class DownloadManager {
       job.etaSec = job.speedBps > 0 && job.total > 0 ? Math.round((job.total - downloaded) / job.speedBps) : null;
       job.lastBytes = downloaded;
       job.lastAt = now;
+    }
+  }
+
+  /** Stream one repo file to destDir as .part, then rename into place. */
+  private async pullFile(job: JobInternal, repoFile: string, partPath: string, finalPath: string, doneBytes: number): Promise<number> {
+    const name = path.basename(repoFile);
+    job.phase = 'downloading';
+    // Stall watchdog: abort if no bytes arrive for 60s so a wedged TCP
+    // connection can't hang a multi-GB job forever at its last speedBps.
+    const wd = idleWatchdog(job.abort.signal, STALL_MS);
+    try {
+      const res = await fetch(resolveFileUrl(job.repo, repoFile), { headers: hfHeaders(), signal: wd.signal });
+      if (!res.ok || !res.body) throw new Error(`Hugging Face ${res.status} for ${name}`);
+
+      const ws = createWriteStream(partPath);
+      const reader = res.body.getReader();
+      let fileBytes = 0;
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          wd.reset();
+          if (!ws.write(Buffer.from(value))) await new Promise<void>((r) => ws.once('drain', r));
+          fileBytes += value.length;
+          this.tick(job, doneBytes + fileBytes);
+        }
+        await new Promise<void>((resolve, reject) => ws.end((err?: Error | null) => (err ? reject(err) : resolve())));
+      } catch (e) {
+        ws.destroy();
+        await fs.rm(partPath, { force: true });
+        throw e;
+      }
+      await fs.rename(partPath, finalPath);
+      return fileBytes;
+    } finally {
+      wd.done();
+    }
+  }
+
+  /**
+   * Check a finished file against what the HF tree promised, flipping the job
+   * phase so the UI shows "verifying" while the checksum runs.
+   */
+  private async verifyFile(job: JobInternal, name: string, finalPath: string, exp: HfDownloadFile): Promise<void> {
+    job.phase = 'verifying';
+    try {
+      await verifyFileIntegrity(finalPath, name, exp);
+    } finally {
+      job.phase = 'downloading';
     }
   }
 
@@ -136,50 +233,47 @@ class DownloadManager {
         }
       }
 
+      const expected = new Map(job.files.map((f) => [f.path, f]));
+
       for (const repoFile of job.paths) {
         const name = path.basename(repoFile);
         const finalPath = path.join(job.destDir, name);
         const partPath = `${finalPath}.part`;
+        const exp = expected.get(repoFile) ?? { path: repoFile, size: 0, sha256: null };
 
-        // Already downloaded fully? Skip (cheap resume across the file set).
+        // Already downloaded fully? Skip (cheap resume across the file set) —
+        // but only when the size matches what HF says the file should be. A
+        // size>0 file of the wrong size is a truncated older download: delete
+        // and refetch it. When HF gave no size, any non-empty file passes.
         // Documented limitation: no HTTP Range resume WITHIN a file — a failed
         // file restarts from zero.
         try {
           const st = await fs.stat(finalPath);
-          if (st.size > 0) { doneBytes += st.size; this.tick(job, doneBytes); continue; }
-        } catch { /* not present */ }
+          if (exp.size > 0 ? st.size === exp.size : st.size > 0) { doneBytes += st.size; this.tick(job, doneBytes); continue; }
+          logger.warn('existing file has wrong size, re-downloading', { path: finalPath, have: st.size, want: exp.size });
+          await fs.rm(finalPath, { force: true });
+        } catch (e) {
+          if (e instanceof Error && 'code' in e && e.code !== 'ENOENT') throw e;
+        }
 
-        // Stall watchdog: abort if no bytes arrive for 60s so a wedged TCP
-        // connection can't hang a multi-GB job forever at its last speedBps.
-        const wd = idleWatchdog(job.abort.signal, STALL_MS);
-        try {
-          const res = await fetch(resolveFileUrl(job.repo, repoFile), { headers: hfHeaders(), signal: wd.signal });
-          if (!res.ok || !res.body) throw new Error(`Hugging Face ${res.status} for ${name}`);
-
-          const ws = createWriteStream(partPath);
-          const reader = res.body.getReader();
-          let fileBytes = 0;
+        // Pull the file and verify it; on an integrity mismatch the bad bytes
+        // are deleted and the file is refetched once before the job fails.
+        let fileBytes = 0;
+        for (let attempt = 1; ; attempt++) {
           try {
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              wd.reset();
-              if (!ws.write(Buffer.from(value))) await new Promise<void>((r) => ws.once('drain', r));
-              fileBytes += value.length;
-              this.tick(job, doneBytes + fileBytes);
-            }
-            await new Promise<void>((resolve, reject) => ws.end((err?: Error | null) => (err ? reject(err) : resolve())));
+            fileBytes = await this.pullFile(job, repoFile, partPath, finalPath, doneBytes);
+            await this.verifyFile(job, name, finalPath, exp);
+            break;
           } catch (e) {
-            ws.destroy();
-            await fs.rm(partPath, { force: true });
+            if (e instanceof IntegrityError && attempt < 2) {
+              logger.warn('integrity check failed, re-downloading', { path: finalPath, err: errText(e) });
+              continue;
+            }
             throw e;
           }
-          await fs.rename(partPath, finalPath);
-          doneBytes += fileBytes;
-          this.tick(job, doneBytes);
-        } finally {
-          wd.done();
         }
+        doneBytes += fileBytes;
+        this.tick(job, doneBytes);
       }
 
       job.status = 'done';
@@ -228,8 +322,8 @@ class DownloadManager {
   }
 
   private view(j: JobInternal): DownloadJob {
-    const { abort, destDir, paths, lastBytes, lastAt, ...pub } = j; // strip internals
-    void abort; void destDir; void paths; void lastBytes; void lastAt;
+    const { abort, destDir, paths, files, lastBytes, lastAt, ...pub } = j; // strip internals
+    void abort; void destDir; void paths; void files; void lastBytes; void lastAt;
     return pub;
   }
 }

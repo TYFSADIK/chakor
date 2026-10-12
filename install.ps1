@@ -4,9 +4,10 @@
 #  Right click and "Run with PowerShell", or from a terminal:
 #      powershell -ExecutionPolicy Bypass -File install.ps1
 #
-#  It installs what Chakor needs (Git, Node 20+, and Ollama for local models),
-#  writes your config, builds the app, and starts it. Optional tools that fail
-#  are skipped with a note instead of stopping the whole install.
+#  It installs what Chakor needs (Git, Node 20+, Python for the Agent
+#  Workspace tools, and Ollama for local models), writes your config, builds
+#  the app, and starts it. Optional tools that fail are skipped with a note
+#  instead of stopping the whole install.
 #
 #  Examples:
 #      powershell -ExecutionPolicy Bypass -File install.ps1
@@ -49,7 +50,7 @@ Options:
   -Help       Show this and exit.
 
 Notes:
-  - Installs Git, Node 20+, and (unless -NoOllama) Ollama via winget.
+  - Installs Git, Node 20+, Python, and (unless -NoOllama) Ollama via winget.
   - For GPU on Windows, just keep your NVIDIA driver current. For llama.cpp builds
     or LM Studio, see the README.
 "@ | Write-Host
@@ -129,6 +130,19 @@ if (Test-NodeOk) {
   Say "Node $(node -v) ready."
 }
 
+# ---- Python (Agent Workspace document tools) ---------------------------------
+if (Have "python") {
+  Say "Python already installed."
+} else {
+  Step "Installing Python (needed by Agent Workspace document tools)"
+  if (Install-Pkg "Python.Python.3.12" "python") {
+    Say "Python ready."
+  } else {
+    Warn "Could not install Python automatically. Get it at https://www.python.org/downloads/"
+    Warn "Agent Workspace document tools (docx/pptx/charts) will not work without it."
+  }
+}
+
 # ---- Ollama (local models, no compiling) -------------------------------------
 if (-not $Minimal -and -not $NoOllama) {
   if (Have "ollama") {
@@ -147,6 +161,19 @@ if (-not $Minimal -and -not $NoOllama) {
 Step "Installing app dependencies"
 npm install --legacy-peer-deps
 
+# ---- Python venv for Agent Workspace (docx/pptx/charts) ----------------------
+$VenvPython = Join-Path $PSScriptRoot ".venv\Scripts\python.exe"
+if (Have "python") {
+  Step "Setting up the Python environment for Agent Workspace"
+  if (-not (Test-Path $VenvPython)) {
+    python -m venv .venv
+  }
+  & $VenvPython -m pip install --quiet --disable-pip-version-check python-docx python-pptx matplotlib pandas
+} else {
+  Warn "python not on PATH — skipping the Agent Workspace venv."
+  Warn "After installing Python, run:  python -m venv .venv; .venv\Scripts\pip install python-docx python-pptx matplotlib pandas"
+}
+
 # ---- config: .env.local with a generated AUTH_SECRET -------------------------
 if (-not (Test-Path ".env.local")) {
   Step "Creating .env.local"
@@ -154,7 +181,12 @@ if (-not (Test-Path ".env.local")) {
   $bytes = New-Object byte[] 32
   [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
   $secret = [Convert]::ToBase64String($bytes)
-  (Get-Content ".env.local") -replace "REPLACE_ME_WITH_openssl_rand_base64_32", $secret | Set-Content ".env.local"
+  $content = (Get-Content ".env.local") -replace "REPLACE_ME_WITH_openssl_rand_base64_32", $secret
+  # Point the app at the venv created above (Windows uses Scripts\, not bin\).
+  if (Test-Path $VenvPython) {
+    $content = $content -replace '^CHAKOR_PYTHON=.*', ('CHAKOR_PYTHON="' + $VenvPython + '"')
+  }
+  $content | Set-Content ".env.local"
   Say "Generated a random AUTH_SECRET. Add any model API keys to .env.local for cloud models."
 } else {
   Say ".env.local already exists, leaving it as-is."
@@ -172,6 +204,10 @@ Write-Host "`n------------------------------------------------------------" -For
 Say "Chakor is set up."
 Write-Host "Open      http://localhost:3001   (first account you register is the admin)"
 Write-Host "Config    edit .env.local to add cloud keys or rebrand"
+Write-Host ""
+Warn "Note: Agent Workspace's Python sandbox limits (CPU/memory/process caps) are"
+Warn "Linux-only — scripts/sandbox-runner.py uses the resource module and /proc."
+Warn "On Windows the document tools may not run; use the Docker image instead."
 Write-Host "------------------------------------------------------------" -ForegroundColor Green
 
 if ($NoStart) {

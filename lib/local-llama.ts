@@ -12,6 +12,9 @@ import { promises as fs, existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { isVisionModel } from './models';
+import { matchingMmproj } from './huggingface';
+import { detectHardware } from './hardware';
+import { recommendedModelPath } from './hwfit';
 
 const RUNTIME_ENV = process.env.CHAKOR_LLAMA_RUNTIME ?? path.join(process.cwd(), 'data', 'llama-runtime.env');
 
@@ -107,13 +110,19 @@ async function ggufFilesIn(dir: string, depth: number): Promise<string[]> {
   return out;
 }
 
-/** Look for a `*mmproj*.gguf` sibling so vision models can be launched with sight. */
+/**
+ * Look for the `*mmproj*.gguf` sibling that belongs to THIS model so vision
+ * models can be launched with sight. Matched by filename stem — a shared
+ * directory (~/Downloads) can hold several unrelated models, so grabbing the
+ * first mmproj found pairs the wrong projector and breaks vision.
+ */
 export async function findMmproj(modelPath: string): Promise<string | null> {
   try {
     const dir = path.dirname(modelPath);
     const files = await fs.readdir(dir);
-    const m = files.find((f) => /mmproj/i.test(f) && f.toLowerCase().endsWith('.gguf'));
-    return m ? path.join(dir, m) : null;
+    const candidates = files.filter((f) => /mmproj/i.test(f) && f.toLowerCase().endsWith('.gguf'));
+    const match = matchingMmproj(path.basename(modelPath), candidates);
+    return match ? path.join(dir, match) : null;
   } catch {
     return null;
   }
@@ -197,13 +206,25 @@ export function resolveLlamaBin(): string {
   return 'llama-server'; // last resort: let the OS resolve it on PATH
 }
 
-/** Decide which GGUF to launch: saved choice, env default, else the largest found. */
+/**
+ * Decide which GGUF to launch: saved choice, env default, else the largest
+ * model that actually fits this machine's memory. scanLocalModels() sorts
+ * biggest-first, so blindly taking [0] OOM-crash-loops small machines — hwfit
+ * picks the largest file that fits instead. If hwfit can't decide (nothing
+ * fits, or the hardware probe failed), fall back to the SMALLEST model, the
+ * one least likely to crash — never the biggest.
+ */
 export async function resolveModelPath(cfg: RuntimeConfig): Promise<string | null> {
   if (cfg.model && existsSync(cfg.model)) return cfg.model;
   const envDefault = process.env.LLAMA_GGUF;
   if (envDefault && existsSync(envDefault)) return envDefault;
   const found = await scanLocalModels(envDefault ?? null);
-  return found[0]?.path ?? null;
+  if (!found.length) return null;
+  try {
+    const recommended = recommendedModelPath(found, await detectHardware());
+    if (recommended) return recommended;
+  } catch { /* hardware probe failed — fall through to the safe default */ }
+  return found[found.length - 1].path;
 }
 
 /** The full llama-server argument list for a given model + context. */
@@ -223,8 +244,12 @@ export function buildLlamaArgs(opts: { model: string; ctx: number; alias?: strin
     '--no-mmap',
     '--cache-ram', '0',
     '--n-predict', process.env.LLAMA_NPREDICT ?? '3000',
-    '--chat-template-kwargs', '{"enable_thinking":false}',
   ];
+  // Qwen3-family models default to "thinking" mode; turn it off so replies come
+  // straight out. Other families reject this kwarg, so scope it to Qwen3 only.
+  if (/qwen-?3/i.test(path.basename(opts.model))) {
+    args.push('--chat-template-kwargs', '{"enable_thinking":false}');
+  }
   if (opts.mmproj && existsSync(opts.mmproj)) args.push('--mmproj', opts.mmproj);
   if (process.env.LLAMA_EXTRA) args.push(...process.env.LLAMA_EXTRA.split(' ').filter(Boolean));
   return args;

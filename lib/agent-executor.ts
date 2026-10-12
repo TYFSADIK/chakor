@@ -280,8 +280,8 @@ export async function* runAgent(
 
       if (!TOOLS[call.tool]) {
         yield { type: "error", message: `Unknown tool: ${call.tool}` };
+        if (!replied) { messages.push({ role: "assistant", content: fullReply }); replied = true; }
         messages.push({ role: "user", content: `[Observation] Unknown tool "${call.tool}". Use only the listed tools.` });
-        replied = true;
         continue;
       }
 

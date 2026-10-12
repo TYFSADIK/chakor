@@ -1,20 +1,24 @@
+# Example systemd unit for Chakor. Before installing:
+#   1. Replace YOUR_USER below with the user that should run Chakor.
+#   2. Replace every /path/to/chakor with the folder you cloned it into.
+#   3. Point ExecStart at your node binary (`command -v node`).
+# Then: sudo cp scripts/chakor.service /etc/systemd/system/ && sudo systemctl enable --now chakor
+
 [Unit]
 Description=Chakor (app + local model)
 After=network.target
 
 [Service]
-# Adjust both of these to your install: the user that should run Chakor and
-# the folder you cloned it into.
-User=ai
-WorkingDirectory=/home/ai/chakor
+User=YOUR_USER
+WorkingDirectory=/path/to/chakor
 Environment=NODE_ENV=production
 # The leading '-' makes the file optional: the unit still starts if .env.local
 # is missing (defaults apply). Point it at wherever your .env.local lives.
-EnvironmentFile=-/home/ai/chakor/.env.local
+EnvironmentFile=-/path/to/chakor/.env.local
 # Chakor runs llama-server itself, so this one unit is the whole stack.
 # NVIDIA only: uncomment to clear a wedged CUDA/UVM state before start (runs as root).
 #ExecStartPre=+/bin/sh -c 'modprobe -r nvidia_uvm 2>/dev/null || true; modprobe nvidia_uvm || true'
-ExecStart=/usr/bin/node /home/ai/chakor/node_modules/next/dist/bin/next start -p 3001 -H 127.0.0.1
+ExecStart=/usr/bin/node /path/to/chakor/node_modules/next/dist/bin/next start -p 3001 -H 127.0.0.1
 Restart=always
 RestartSec=5
 LimitNOFILE=65535

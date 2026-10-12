@@ -1,0 +1,60 @@
+'use client';
+
+import { memo, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import rehypeHighlight from 'rehype-highlight';
+
+// Shared markdown pipeline: GFM + syntax highlighting + code blocks with a
+// copy button. Used by the chat bubbles, the arena, and the public share page.
+
+const IcoCopy = () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>;
+const IcoCheck = () => <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><polyline points="20 6 9 17 4 12"/></svg>;
+
+export const CodeBlock = memo(function CodeBlock({ children }: { children: React.ReactNode }) {
+  const [copied, setCopied] = useState(false);
+  const ref = useRef<HTMLPreElement>(null);
+  let lang = '';
+  try { const m = ((children as {props?:{className?:string}})?.props?.className??'').match(/language-(\w+)/); if(m) lang=m[1]; } catch {}
+  const copy = async () => { try { await navigator.clipboard.writeText(ref.current?.textContent??''); setCopied(true); setTimeout(()=>setCopied(false),2000); } catch {} };
+  return (
+    <div className="codeblock">
+      <div className="codeblock-header">
+        <span className="codeblock-lang">{lang||'code'}</span>
+        <button onClick={copy} className={`codeblock-copy ${copied?'copied':''}`}>
+          {copied ? <><IcoCheck /> Copied</> : <><IcoCopy /> Copy</>}
+        </button>
+      </div>
+      <pre ref={ref}>{children}</pre>
+    </div>
+  );
+});
+
+export const Markdown = memo(function Markdown({ children }: { children: string }) {
+  return (
+    <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}
+      components={{
+        pre:    ({children})=><CodeBlock>{children}</CodeBlock>,
+        code:   ({className,children,...p})=><code className={className} {...p}>{children}</code>,
+        a:      ({href,children})=><a href={href} target="_blank" rel="noopener noreferrer">{children}</a>,
+        p:      ({children})=><p>{children}</p>,
+        ul:     ({children})=><ul>{children}</ul>,
+        ol:     ({children})=><ol>{children}</ol>,
+        li:     ({children})=><li>{children}</li>,
+        h1:     ({children})=><h1>{children}</h1>,
+        h2:     ({children})=><h2>{children}</h2>,
+        h3:     ({children})=><h3>{children}</h3>,
+        h4:     ({children})=><h4>{children}</h4>,
+        blockquote:({children})=><blockquote>{children}</blockquote>,
+        hr:     ()=><hr/>,
+        strong: ({children})=><strong>{children}</strong>,
+        em:     ({children})=><em>{children}</em>,
+        table:  ({children})=><div style={{overflowX:'auto'}}><table>{children}</table></div>,
+        th:     ({children})=><th>{children}</th>,
+        td:     ({children})=><td>{children}</td>,
+        tr:     ({children})=><tr>{children}</tr>,
+      }}>
+      {children}
+    </ReactMarkdown>
+  );
+});

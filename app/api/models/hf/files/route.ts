@@ -25,6 +25,9 @@ export async function GET(req: NextRequest) {
     const withFit = files.map((f) => ({ ...f, fit: fitModel(f.size, hw) }));
     return NextResponse.json({ repo, files: withFit });
   } catch (e) {
-    return NextResponse.json({ error: e instanceof Error ? e.message : 'Could not read repo files.' }, { status: 502 });
+    // Raw errors can carry internal URLs or token-bearing request detail —
+    // log server-side, answer generically.
+    console.error('hf files error:', e);
+    return NextResponse.json({ error: 'Could not read repo files.' }, { status: 502 });
   }
 }

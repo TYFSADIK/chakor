@@ -1,4 +1,4 @@
-export type ModelProvider = 'llama' | 'ollama' | 'lmstudio' | 'openai' | 'anthropic' | 'google' | 'openrouter';
+export type ModelProvider = 'llama' | 'ollama' | 'lmstudio' | 'openai' | 'anthropic' | 'google' | 'openrouter' | 'chakor';
 
 export const OLLAMA_BASE_URL = process.env.OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434';
 
@@ -20,7 +20,7 @@ export interface ModelConfig {
 // Rough name match for local/Ollama vision models. We can't introspect a GGUF
 // for an mmproj, so we go by the well-known families. False negatives just mean
 // the attach button is hidden; users on a custom build can set LLAMA_VISION=true.
-const VISION_NAME_RE = /llava|bakllava|moondream|minicpm-?v|pixtral|cogvlm|qwen2?\.?5?-?vl|llama-?3\.?2-?vision|granite3?\.?2?-?vision|gemma-?3|vision/i;
+const VISION_NAME_RE = /llava|bakllava|moondream|minicpm-?v|pixtral|cogvlm|qwen\d?(\.\d+)?-?vl|llama-?3\.?2-?vision|granite3?\.?\d?-?vision|gemma-?[34]|vision/i;
 
 export function isVisionModel(name: string): boolean {
   return VISION_NAME_RE.test(name);
@@ -102,6 +102,36 @@ export function getAvailableModels(): ModelConfig[] {
 
 export function defaultModel(): ModelConfig {
   return getAvailableModels()[0];
+}
+
+/**
+ * The single synthetic model id non-admin users see. The real model the server
+ * runs (e.g. the GGUF file name) must never leak to them, so every model they
+ * can read or send is just this one "Chakor" entry.
+ */
+export const MASKED_MODEL_ID = 'chakor';
+
+/**
+ * What non-admin users get from the model list instead of the real models:
+ * one synthetic entry named after the app. It never resolves to a provider on
+ * its own — chat requests force-resolve to the server's default model — the
+ * 'chakor' provider exists purely so the UI can group and render it.
+ */
+export function maskedModel(): ModelConfig {
+  const appName = process.env.NEXT_PUBLIC_APP_NAME ?? process.env.APP_NAME ?? 'Chakor';
+  const d = defaultModel();
+  return { id: MASKED_MODEL_ID, name: appName, provider: 'chakor', contextWindow: d.contextWindow, vision: d.vision };
+}
+
+/**
+ * Which model actually serves a chat request. Non-admins are pinned to the
+ * server's default model no matter what id they send — including a hand-crafted
+ * real model name — so they can neither select nor probe specific models.
+ * Admins keep free selection, with the default as fallback.
+ */
+export function resolveChatModel(modelId: string | undefined, isAdmin: boolean): ModelConfig {
+  if (!isAdmin) return defaultModel();
+  return (modelId ? getModel(modelId) : null) ?? defaultModel();
 }
 
 export function getModel(id: string): ModelConfig | undefined {

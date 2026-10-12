@@ -4,7 +4,7 @@ Thanks for your interest in improving Chakor! This is a small, friendly project.
 
 ## Getting set up
 
-1. Follow the [Quickstart](README.md#-quickstart) to get it running locally.
+1. Follow the [Quickstart](README.md#quick-start) to get it running locally.
 2. Use `npm run dev` for hot-reload during development (runs on port 3001).
 
 ## Workflow

@@ -1,19 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { requireUser } from '@/lib/guard';
 import { listMemories, createMemory } from '@/lib/db';
 import { randomUUID } from 'node:crypto';
 
 export async function GET() {
-  const session = await auth();
-  if (!session?.user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  const userId = (session.user as unknown as { id: number }).id;
-  return NextResponse.json(listMemories(userId));
+  const authd = await requireUser();
+  if (authd instanceof NextResponse) return authd;
+  return NextResponse.json(listMemories(authd.userId));
 }
 
 export async function POST(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  const userId = (session.user as unknown as { id: number }).id;
+  const authd = await requireUser();
+  if (authd instanceof NextResponse) return authd;
+  const { userId } = authd;
   const body = await req.json().catch(() => ({}));
   const content = String(body?.content ?? '').trim();
   if (!content) return NextResponse.json({ error: 'content required' }, { status: 400 });

@@ -14,7 +14,7 @@
 import { promises as fs } from 'node:fs';
 import { discoverOllamaModels, discoverLmStudioModels, OLLAMA_BASE_URL, LMSTUDIO_BASE_URL } from './models';
 import { liveProps, readRuntimeEnv, resolveModelPath, waitForHealthy } from './local-llama';
-import { llamaSupervisor } from './llama-supervisor';
+import { llamaSupervisor, type FailureKind } from './llama-supervisor';
 import { detectHardware } from './hardware';
 import { maxContextForModel } from './hwfit';
 
@@ -35,6 +35,8 @@ export interface EngineStatus {
   managed?: boolean;
   /** llama.cpp only: last crash/launch error, if any. */
   error?: string | null;
+  /** llama.cpp only: typed reason for `error`, for targeted UI advice. */
+  failureKind?: FailureKind | null;
   /** llama.cpp only: the supervisor gave up after repeated crashes. */
   crashed?: boolean;
 }
@@ -64,6 +66,7 @@ async function probeLlama(): Promise<EngineStatus> {
     detail,
     managed: st.managing,
     error: st.lastError,
+    failureKind: st.failureKind,
     crashed: st.crashed,
   };
 }

@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
+import { isAdminSession } from '@/lib/guard';
 import { OLLAMA_BASE_URL } from '@/lib/models';
 
 // POST { name }: size, quantization and family for an installed Ollama model
-// (from `/api/show`). Read-only, available to any signed-in user.
+// (from `/api/show`). Admin only — it exists to manage real models, whose
+// names non-admins must never see.
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  if (!isAdminSession(session)) return NextResponse.json({ error: 'forbidden' }, { status: 403 });
 
   const body = await req.json().catch(() => null);
   const name = String(body?.name ?? '').trim();

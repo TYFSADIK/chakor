@@ -1,21 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { requireUser } from '@/lib/guard';
 import { listApiKeys, createApiKey } from '@/lib/db';
 import { generateApiToken, maskToken } from '@/lib/apiauth';
-
-function userId(session: { user?: unknown } | null): number | null {
-  const id = (session?.user as { id?: number } | undefined)?.id;
-  return typeof id === 'number' ? id : null;
-}
 
 // List the caller's API keys. Tokens are masked — the full value is only ever
 // shown once, at creation time.
 export async function GET() {
-  const session = await auth();
-  const uid = userId(session);
-  if (!uid) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const authd = await requireUser();
+  if (authd instanceof NextResponse) return authd;
+  const { userId } = authd;
 
-  const keys = listApiKeys(uid).map((k) => ({
+  const keys = listApiKeys(userId).map((k) => ({
     id: k.id,
     name: k.name,
     masked: maskToken(k.token_tail ?? ''),
@@ -27,15 +22,15 @@ export async function GET() {
 
 // Create a new key. Returns the full token exactly once.
 export async function POST(req: NextRequest) {
-  const session = await auth();
-  const uid = userId(session);
-  if (!uid) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  const authd = await requireUser();
+  if (authd instanceof NextResponse) return authd;
+  const { userId } = authd;
 
   const body = await req.json().catch(() => null);
   const name = String(body?.name ?? '').trim().slice(0, 60) || 'API key';
 
   const token = generateApiToken();
-  const key = createApiKey(uid, name, token);
+  const key = createApiKey(userId, name, token);
 
   return NextResponse.json({ id: key.id, name: key.name, token, created_at: key.created_at });
 }

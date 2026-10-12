@@ -7,7 +7,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/lib/auth";
+import { requireUser } from "@/lib/guard";
 import { getConversation } from "@/lib/db";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -53,11 +53,9 @@ function resolveFile(convId: string, name: string, userId: number): string | nul
 async function authorize(
   params: Promise<{ convId: string; name: string }>
 ): Promise<{ userId: number; convId: string; name: string } | NextResponse> {
-  const session = await auth();
-  if (!session?.user) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
-  const userId = (session.user as unknown as { id: number }).id;
+  const authd = await requireUser();
+  if (authd instanceof NextResponse) return authd;
+  const { userId } = authd;
   const { convId, name } = await params;
   if (!/^[a-zA-Z0-9-]+$/.test(convId)) {
     return NextResponse.json({ error: "invalid conversation id" }, { status: 400 });

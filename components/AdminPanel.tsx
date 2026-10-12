@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Link from 'next/link';
 import { ChakorWordmark } from './LoginForm';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 
 type Stats = { users: number; conversations: number; messages: number; documents: number; dbBytes: number; topUsers: { username: string; is_admin: number; conv_count: number; msg_count: number }[]; dailyStats?: { day: string; count: number }[] };
 type SystemStatus = { llamaOnline: boolean; llamaUrl: string; modelName: string; gpuStats: { utilization: number; memUsed: number; memTotal: number }[] | null };
@@ -106,6 +107,19 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
   const [loadingMsgs, setLoadingMsgs] = useState(false);
   const [lastRefresh, setLastRefresh] = useState<Date|null>(null);
   const timer = useRef<ReturnType<typeof setInterval>|null>(null);
+  // Action feedback (success + failure) — the red banner stays for load errors.
+  const [toast, setToast] = useState<{msg:string;ok:boolean}|null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout>|null>(null);
+  const [acting, setActing] = useState(false); // guards destructive modal actions
+  const resetTrapRef = useFocusTrap<HTMLDivElement>(!!resetModal, () => setResetModal(null));
+  const confirmTrapRef = useFocusTrap<HTMLDivElement>(!!confirm, () => { if (!acting) setConfirm(null); });
+
+  function notify(msg: string, ok = true) {
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    setToast({ msg, ok });
+    toastTimer.current = setTimeout(() => setToast(null), 3500);
+  }
+  useEffect(() => () => { if (toastTimer.current) clearTimeout(toastTimer.current); }, []);
 
   const loadStats = useCallback(async()=>{ setLoading(true); setError(''); try{const r=await fetch('/api/admin/stats');if(!r.ok)throw new Error(await r.text());setStats(await r.json());setLastRefresh(new Date());}catch(e){setError(String(e));}finally{setLoading(false);}}, []);
   const loadUsers = useCallback(async()=>{ setLoading(true); setError(''); try{const r=await fetch('/api/admin/users');if(!r.ok)throw new Error(await r.text());setUsers(await r.json());setLastRefresh(new Date());}catch(e){setError(String(e));}finally{setLoading(false);}}, []);
@@ -117,9 +131,9 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
 
   async function selectUser(u: User) { setSelectedUser(u);setSelectedConv(null);setChatMsgs([]);setLoadingConv(true); try{const r=await fetch(`/api/admin/users/${u.id}/conversations`);if(r.ok)setConvs(await r.json());else setError('Failed to load conversations');}catch{setError('Network error, please try again');}finally{setLoadingConv(false);} }
   async function selectConv(c: Conv) { setSelectedConv(c);setLoadingMsgs(true); try{const r=await fetch(`/api/admin/conversations/${c.id}/messages`);if(r.ok)setChatMsgs(await r.json());else setError('Failed to load messages');}catch{setError('Network error, please try again');}finally{setLoadingMsgs(false);} }
-  async function deleteUser(u: User) { try{const r=await fetch(`/api/admin/users/${u.id}`,{method:'DELETE'}); const d=await r.json().catch(()=>null); if(!r.ok){setError(d?.error??'Failed to delete user');return;} setUsers(p=>p.filter(x=>x.id!==u.id));setConfirm(null); if(selectedUser?.id===u.id){setSelectedUser(null);setConvs([]);setSelectedConv(null);setChatMsgs([]);} }catch{setError('Network error, please try again');} }
-  async function resetPw(u: User) { try{const r=await fetch(`/api/admin/users/${u.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'reset_password'})}); const d=await r.json().catch(()=>null); if(!r.ok){setError(d?.error??'Failed to reset password');return;} if(!d){setError('Failed to reset password');return;} setResetModal({user:u,tempPassword:d.tempPassword}); }catch{setError('Network error, please try again');} }
-  async function toggleAdmin(u: User) { const val=u.is_admin===1?0:1; try{const r=await fetch(`/api/admin/users/${u.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({is_admin:val})}); const d=await r.json().catch(()=>null); if(!r.ok){setError(d?.error??'Failed to update user');return;} setUsers(p=>p.map(x=>x.id===u.id?{...x,is_admin:val}:x)); }catch{setError('Network error, please try again');} }
+  async function deleteUser(u: User) { if(acting)return; setActing(true); try{const r=await fetch(`/api/admin/users/${u.id}`,{method:'DELETE'}); const d=await r.json().catch(()=>null); if(!r.ok){notify(d?.error??'Failed to delete user',false);return;} setUsers(p=>p.filter(x=>x.id!==u.id));setConfirm(null); if(selectedUser?.id===u.id){setSelectedUser(null);setConvs([]);setSelectedConv(null);setChatMsgs([]);} notify(`Deleted ${u.username}`); }catch{notify('Network error, please try again',false);} finally{setActing(false);} }
+  async function resetPw(u: User) { if(acting)return; setActing(true); try{const r=await fetch(`/api/admin/users/${u.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'reset_password'})}); const d=await r.json().catch(()=>null); if(!r.ok){notify(d?.error??'Failed to reset password',false);return;} if(!d){notify('Failed to reset password',false);return;} setResetModal({user:u,tempPassword:d.tempPassword}); notify(`Password reset for ${u.username}`); }catch{notify('Network error, please try again',false);} finally{setActing(false);} }
+  async function toggleAdmin(u: User) { const val=u.is_admin===1?0:1; try{const r=await fetch(`/api/admin/users/${u.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({is_admin:val})}); const d=await r.json().catch(()=>null); if(!r.ok){notify(d?.error??'Failed to update user',false);return;} setUsers(p=>p.map(x=>x.id===u.id?{...x,is_admin:val}:x)); notify(val?`${u.username} is now an admin`:`${u.username} is no longer an admin`); }catch{notify('Network error, please try again',false);} }
   function handleSort(col: typeof sortCol) { if(sortCol===col)setSortDir(d=>d==='asc'?'desc':'asc');else{setSortCol(col);setSortDir('desc');} }
 
   const filteredUsers = users
@@ -134,6 +148,13 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
 
   return (
     <div style={{minHeight:'100vh',background:'var(--bg)',color:'var(--fg)'}}>
+      {/* Action toast */}
+      {toast&&(
+        <div className="toast" role="status" aria-live="polite" style={{position:'fixed',top:16,right:16,zIndex:100,display:'flex',alignItems:'center',gap:10,padding:'11px 15px',background:'var(--bg-2)',border:`1px solid ${toast.ok?'rgba(74,222,128,.18)':'rgba(248,113,113,.18)'}`,boxShadow:'var(--sh-lg)',fontSize:13,color:'var(--fg)',maxWidth:340}}>
+          <span style={{color:toast.ok?'var(--ok)':'var(--err)',fontSize:12,flexShrink:0}}>{toast.ok?'✓':'✕'}</span>
+          <span style={{flex:1}}>{toast.msg}</span>
+        </div>
+      )}
       {/* Header */}
       <header style={{position:'sticky',top:0,zIndex:10,display:'flex',alignItems:'center',gap:14,padding:'0 24px',height:54,borderBottom:'3px double var(--fg)',background:'var(--bg)'}}>
         <ChakorWordmark size={24}/>
@@ -177,7 +198,15 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
         </div>
 
         {error&&<div style={{background:cm('var(--err)',8),border:`1px solid ${cm('var(--err)',30)}`,borderRadius:0,padding:'10px 14px',marginBottom:16,fontSize:13,color:'var(--err)',display:'flex',alignItems:'center',gap:10}}>{error}<button onClick={()=>setError('')} style={{marginLeft:'auto',background:'none',border:'none',color:'var(--fg-3)',cursor:'pointer',fontSize:11,fontFamily:TYPE,textTransform:'uppercase'}}>dismiss</button></div>}
-        {loading&&!stats&&!users.length&&<div style={{display:'flex',alignItems:'center',gap:8,fontSize:13,color:'var(--fg-3)',padding:'16px 0'}}><div style={{width:13,height:13,border:'2px solid var(--g)',borderTopColor:'transparent',borderRadius:'50%',animation:'spin .7s linear infinite'}}/>Loading…</div>}
+        {loading&&!stats&&!users.length&&(
+          <div aria-busy="true" aria-label="Loading" style={{display:'flex',flexDirection:'column',gap:12}}>
+            <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:12}}>
+              {[0,1,2,3].map(i=><div key={i} className="skel" style={{height:92}}/>)}
+            </div>
+            <div className="skel" style={{height:150}}/>
+            <div className="skel" style={{height:220}}/>
+          </div>
+        )}
 
         {/* Dashboard */}
         {tab==='dashboard'&&stats&&(
@@ -228,7 +257,8 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
                   <p className="headline" style={{fontSize:15}}>Top Users</p>
                   <p className="byline">{stats.topUsers.length} users</p>
                 </div>
-                <table style={{width:'100%',borderCollapse:'collapse'}}>
+                <div style={{overflowX:'auto'}}>
+                <table style={{width:'100%',minWidth:420,borderCollapse:'collapse'}}>
                   <thead><tr>{['User','Convs','Msgs','Role'].map(h=><th key={h} style={{...thead,textAlign:h==='User'?'left':'right',paddingLeft:h==='User'?20:14,paddingRight:14}}>{h}</th>)}</tr></thead>
                   <tbody>
                     {stats.topUsers.map((u,i)=>(
@@ -246,6 +276,7 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
             )}
           </div>
@@ -265,7 +296,7 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
             </div>
             <div style={{background:'var(--bg-1)',border:'1px solid var(--bd-2)',borderRadius:0,overflow:'hidden'}}>
               <div style={{overflowX:'auto'}}>
-                <table style={{width:'100%',borderCollapse:'collapse'}}>
+                <table style={{width:'100%',minWidth:520,borderCollapse:'collapse'}}>
                   <thead><tr>
                     {[{l:'User',col:'username'},{l:'Convs',col:'conv_count'},{l:'Msgs',col:'msg_count'},{l:'Actions',col:null}].map(h=>(
                       <th key={h.l} style={{...thead,textAlign:h.l==='User'?'left':'center',cursor:h.col?'pointer':'default'}} onClick={h.col?()=>handleSort(h.col as typeof sortCol):undefined}>
@@ -342,6 +373,8 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
               </div>
               <div style={{overflowY:'auto',flex:1,padding:14,display:'flex',flexDirection:'column',gap:12}}>
                 {loadingMsgs&&<div style={{fontSize:13,color:'var(--fg-3)'}}>Loading…</div>}
+                {!selectedConv&&!loadingMsgs&&<p style={{fontSize:13,color:'var(--fg-4)',fontStyle:'italic',padding:'24px 4px'}}>Pick a user, then a conversation, to read the transcript.</p>}
+                {selectedConv&&!loadingMsgs&&chatMsgs.filter(m=>m.role!=='system').length===0&&<p style={{fontSize:13,color:'var(--fg-4)',fontStyle:'italic',padding:'24px 4px'}}>No messages in this conversation.</p>}
                 {chatMsgs.filter(m=>m.role!=='system').map(m=>(
                   <div key={m.id} style={{display:'flex',justifyContent:m.role==='user'?'flex-end':'flex-start'}}>
                     <div style={{maxWidth:'88%',fontSize:13.5,lineHeight:1.6,padding:'9px 13px',borderRadius:0,background:m.role==='user'?'var(--bg-2)':'transparent',border:m.role==='user'?'1px solid var(--bd-2)':'none',borderLeft:m.role!=='user'?'2px solid var(--g-bd)':undefined,paddingLeft:m.role!=='user'?12:undefined}}>
@@ -359,14 +392,14 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
       {/* Reset PW modal */}
       {resetModal&&(
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.6)',backdropFilter:'blur(6px)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:50,padding:16}}>
-          <div className="modal" style={{width:'100%',maxWidth:400,background:'var(--bg-1)',border:'1px solid var(--bd-2)',borderTop:'3px double var(--fg)',borderRadius:0,padding:28,boxShadow:'var(--sh-lg)'}}>
+          <div ref={resetTrapRef} role="dialog" aria-modal="true" aria-label="Reset password" className="modal" style={{width:'100%',maxWidth:400,background:'var(--bg-1)',border:'1px solid var(--bd-2)',borderTop:'3px double var(--fg)',borderRadius:0,padding:28,boxShadow:'var(--sh-lg)'}}>
             <p className="kicker" style={{marginBottom:6}}>Credentials Desk</p>
             <h3 className="headline" style={{fontSize:19,marginBottom:6}}>Reset Password</h3>
             {!resetModal.tempPassword?(
               <>
-                <p style={{fontSize:13.5,color:'var(--fg-3)',marginBottom:20}}>Generate a temporary password for <strong style={{color:'var(--fg)'}}>{resetModal.user.username}</strong>?</p>
+                <p style={{fontSize:13.5,color:'var(--fg-3)',marginBottom:20}}>Generate a temporary password for <strong style={{color:'var(--fg)'}}>{resetModal.user.username}</strong>? They will need it to sign in again.</p>
                 <div style={{display:'flex',gap:10}}>
-                  <button onClick={()=>resetPw(resetModal.user)} className="btn btn-green" style={{flex:1}}>Generate</button>
+                  <button onClick={()=>resetPw(resetModal.user)} disabled={acting} className="btn btn-green" style={{flex:1,opacity:acting?0.6:1}}>{acting?'Working…':'Generate'}</button>
                   <button onClick={()=>setResetModal(null)} className="btn btn-outline" style={{flex:1}}>Cancel</button>
                 </div>
               </>
@@ -391,7 +424,7 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
       {/* Delete confirm modal */}
       {confirm&&(
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,.6)',backdropFilter:'blur(6px)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:50,padding:16}}>
-          <div className="modal" style={{width:'100%',maxWidth:400,background:'var(--bg-1)',border:`1px solid ${cm('var(--err)',35)}`,borderRadius:0,padding:28,boxShadow:'var(--sh-lg)'}}>
+          <div ref={confirmTrapRef} role="alertdialog" aria-modal="true" aria-label="Delete user" className="modal" style={{width:'100%',maxWidth:400,background:'var(--bg-1)',border:`1px solid ${cm('var(--err)',35)}`,borderRadius:0,padding:28,boxShadow:'var(--sh-lg)'}}>
             <p className="kicker" style={{marginBottom:6}}>Errata</p>
             <h3 className="headline" style={{fontSize:19,marginBottom:6}}>Delete User</h3>
             <p style={{fontSize:13.5,color:'var(--fg-3)',marginBottom:12}}>This will permanently delete <strong style={{color:'var(--fg)'}}>{confirm.user.username}</strong>.</p>
@@ -399,11 +432,11 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
               {confirm.user.conv_count} conversations · {confirm.user.msg_count} messages, all permanently deleted. This cannot be undone.
             </div>
             <div style={{display:'flex',gap:10}}>
-              <button onClick={()=>deleteUser(confirm.user)}
-                style={{flex:1,padding:'11px',borderRadius:0,background:'var(--err)',color:'var(--bg)',fontFamily:TYPE,fontSize:12,letterSpacing:'0.12em',textTransform:'uppercase',border:'none',cursor:'pointer',transition:'opacity .15s'}}
-                onMouseEnter={e=>(e.currentTarget as HTMLElement).style.opacity='.85'}
-                onMouseLeave={e=>(e.currentTarget as HTMLElement).style.opacity='1'}>Delete User</button>
-              <button onClick={()=>setConfirm(null)} className="btn btn-outline" style={{flex:1}}>Cancel</button>
+              <button onClick={()=>deleteUser(confirm.user)} disabled={acting}
+                style={{flex:1,padding:'11px',borderRadius:0,background:'var(--err)',color:'var(--bg)',fontFamily:TYPE,fontSize:12,letterSpacing:'0.12em',textTransform:'uppercase',border:'none',cursor:acting?'default':'pointer',opacity:acting?0.6:1,transition:'opacity .15s'}}
+                onMouseEnter={e=>{if(!acting)(e.currentTarget as HTMLElement).style.opacity='.85';}}
+                onMouseLeave={e=>{if(!acting)(e.currentTarget as HTMLElement).style.opacity='1';}}>{acting?'Deleting…':'Delete User'}</button>
+              <button onClick={()=>setConfirm(null)} disabled={acting} className="btn btn-outline" style={{flex:1}}>Cancel</button>
             </div>
           </div>
         </div>

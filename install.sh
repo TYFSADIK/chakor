@@ -13,8 +13,9 @@
 #       OpenSSL, and Node 20+.
 #    4. Installs Ollama so you can run local models with no compiling (skippable).
 #    5. Optionally builds llama.cpp from source, with NVIDIA CUDA if you have it.
-#    6. Installs the app's deps, writes .env.local with a fresh AUTH_SECRET,
-#       sets up the database, and builds the app.
+#    6. Installs the app's deps, creates the Python venv for Agent Workspace,
+#       writes .env.local with a fresh AUTH_SECRET, sets up the database,
+#       and builds the app.
 #    7. Starts Chakor, or installs it as a service that runs 24/7.
 #
 #  Examples:
@@ -243,12 +244,12 @@ ensure_base_tools() {
   step "Installing base tools (git, curl, compiler, python3, openssl)"
   pm_refresh
   case "$PM" in
-    apt)    pm_install git curl ca-certificates build-essential python3 openssl pkg-config ;;
+    apt)    pm_install git curl ca-certificates build-essential python3 python3-venv openssl pkg-config ;;
     dnf)    pm_install git curl ca-certificates gcc gcc-c++ make python3 openssl pkgconf-pkg-config ;;
     yum)    pm_install git curl ca-certificates gcc gcc-c++ make python3 openssl ;;
-    pacman) pm_install git curl base-devel python openssl ;;
-    zypper) pm_install git curl gcc gcc-c++ make python3 openssl ;;
-    apk)    pm_install git curl ca-certificates build-base python3 openssl ;;
+    pacman) pm_install git curl base-devel python python-pip openssl ;;
+    zypper) pm_install git curl gcc gcc-c++ make python3 python3-pip openssl ;;
+    apk)    pm_install git curl ca-certificates build-base python3 py3-pip openssl ;;
     brew)   have git || pm_install git ;;
     pkg)    pm_install git python openssl clang make ;;
     *)      warn "No known package manager. Make sure git, a C/C++ compiler, python3 and openssl are installed." ;;
@@ -416,7 +417,8 @@ Type=simple
 User=${RUN_USER}
 WorkingDirectory=${SCRIPT_DIR}
 Environment=NODE_ENV=production
-EnvironmentFile=${SCRIPT_DIR}/.env.local
+# The leading '-' keeps the unit starting even if .env.local is missing.
+EnvironmentFile=-${SCRIPT_DIR}/.env.local
 ExecStart=${node_bin} ${SCRIPT_DIR}/node_modules/next/dist/bin/next start -p 3001 -H 0.0.0.0
 Restart=always
 RestartSec=5
@@ -449,6 +451,12 @@ print_summary() {
   fi
   info "Config    edit .env.local to add cloud keys or rebrand"
   info "Log       $LOG_FILE"
+  if [ "$OS" != "Linux" ]; then
+    info ""
+    info "Note      Agent Workspace's Python sandbox limits (CPU/memory/process caps)"
+    info "          are Linux-only — scripts/sandbox-runner.py uses the resource module"
+    info "          and /proc. On $OS the document tools may not run; use Docker instead."
+  fi
   printf '%s------------------------------------------------------------%s\n' "$C_G" "$C_0"
 }
 

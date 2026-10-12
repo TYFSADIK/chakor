@@ -36,8 +36,6 @@
     ".next-staging/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules",
-    "chakor-agent-workspace",
-    ".next-old"
+    "node_modules"
   ]
 }

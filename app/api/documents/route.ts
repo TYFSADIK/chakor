@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { auth } from '@/lib/auth';
+import { requireUser } from '@/lib/guard';
 import { addDocument, listDocuments, addChunks, countUserDocuments } from '@/lib/db';
 import { extractText, chunkText } from '@/lib/rag';
 
@@ -9,16 +9,15 @@ const ALLOWED_MIME = new Set(['application/pdf', 'text/plain', 'text/markdown', 
 const ALLOWED_EXT = new Set(['pdf', 'txt', 'md']);
 
 export async function GET() {
-  const session = await auth();
-  if (!session?.user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  const userId = (session.user as unknown as { id: number }).id;
-  return NextResponse.json(listDocuments(userId));
+  const authd = await requireUser();
+  if (authd instanceof NextResponse) return authd;
+  return NextResponse.json(listDocuments(authd.userId));
 }
 
 export async function POST(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  const userId = (session.user as unknown as { id: number }).id;
+  const authd = await requireUser();
+  if (authd instanceof NextResponse) return authd;
+  const { userId } = authd;
 
   if (countUserDocuments(userId) >= MAX_DOCS_PER_USER) {
     return NextResponse.json(

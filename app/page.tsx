@@ -1,6 +1,8 @@
 import { auth } from '@/lib/auth';
 import { redirect } from 'next/navigation';
 import { listConversations } from '@/lib/db';
+import { isAdminSession } from '@/lib/guard';
+import { MASKED_MODEL_ID } from '@/lib/models';
 import ChatShell from '@/components/ChatShell';
 import { APP } from '@/lib/config';
 
@@ -11,7 +13,12 @@ export default async function Home() {
   if (!session?.user) redirect('/login');
 
   const userId = (session.user as unknown as { id: number }).id;
-  const conversations = listConversations(userId);
+  const admin = isAdminSession(session);
+  // Conversations created before model masking may carry a real model id —
+  // blank it to the masked id for non-admins so it never reaches their client.
+  const conversations = listConversations(userId).map((c) =>
+    admin ? c : { ...c, model: MASKED_MODEL_ID },
+  );
 
   return (
     <ChatShell

@@ -3,6 +3,7 @@
 #   docker compose up -d
 #
 # Then open http://localhost:3001 and register (first account is the admin).
+# Registration defaults to invite mode: set INVITE_CODE in .env first.
 # Your data lives in the "chakor-data" volume and survives restarts.
 #
 # Want a local model bundled too? Start with the ollama profile:
@@ -10,22 +11,34 @@
 #   docker compose --profile ollama up -d
 #   docker compose exec ollama ollama pull llama3.2
 #
-# Any values you set in .env.local override the defaults below.
+# Any values you set in .env (copy .env.example, next to this file) override
+# the defaults below. Note: compose reads .env, NOT .env.local — that one is
+# only for bare-metal installs.
 
 services:
   app:
     build: .
     image: chakor:latest
     container_name: chakor
+    # The ${...} values below are interpolated from .env. To pass a whole env
+    # file through to the container untouched instead, uncomment:
+    # env_file:
+    #   - path: .env
+    #     required: false
     ports:
       - "3001:3001"
     environment:
+      # Leave unset and the entrypoint generates one, persisted in the volume.
+      AUTH_SECRET: ${AUTH_SECRET:-}
       AUTH_URL: ${AUTH_URL:-http://localhost:3001}
-      REGISTRATION_MODE: ${REGISTRATION_MODE:-open}
+      # invite is the safe default: new accounts need INVITE_CODE (set it in
+      # .env). Use "open" only on a trusted network.
+      REGISTRATION_MODE: ${REGISTRATION_MODE:-invite}
+      INVITE_CODE: ${INVITE_CODE:-change-me}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
       # Model downloads land in the data volume, not the container layer.
       CHAKOR_MODELS_DIR: ${CHAKOR_MODELS_DIR:-/data/models}
-      # API keys are optional. Set them in .env.local to enable cloud models.
+      # API keys are optional. Set them in .env to enable cloud models.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GOOGLE_AI_API_KEY: ${GOOGLE_AI_API_KEY:-}

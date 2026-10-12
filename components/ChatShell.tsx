@@ -3,22 +3,20 @@
 import { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react';
 import { signOut } from 'next-auth/react';
 import Link from 'next/link';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import rehypeHighlight from 'rehype-highlight';
 import { useSpeechRecognition } from '@/hooks/useSpeechRecognition';
 import { useTextToSpeech } from '@/hooks/useTextToSpeech';
 import { ChakorMark } from './LoginForm';
 import ThemeEditor from './ThemeEditor';
 import AgentWorkspace, { type AgentWorkspaceHandle } from './AgentWorkspace';
+import { Markdown } from './Markdown';
+import { SourceCards, type Source } from './SourceCards';
 import { APP } from '@/lib/config';
 
 // ─── Types ────────────────────────────────────────────────────
 type Conv   = { id: string; title: string; model: string; created_at: number; updated_at: number; folder_id?: number|null; pinned?: number; archived?: number; tags?: string[] };
 type Folder = { id: number; name: string; position: number };
-type Source = { title: string; url: string; snippet?: string };
 type Stats  = { promptTokens: number; generationTokens: number; generationMs: number; tokensPerSecond: number };
-type Msg    = { role: 'user' | 'assistant'; content: string; streaming?: boolean; sources?: Source[]; stats?: Stats; dbId?: number; images?: string[]; toolEvents?: ToolEvt[] };
+type Msg    = { role: 'user' | 'assistant'; content: string; streaming?: boolean; sources?: Source[]; stats?: Stats; dbId?: number; cid?: number; images?: string[]; toolEvents?: ToolEvt[] };
 type User   = { id: number; name?: string | null; email?: string | null; isAdmin?: boolean };
 type Doc    = { id: number; filename: string; mime_type: string | null; size_bytes: number | null; created_at: number };
 type Model  = { id: string; name: string; provider: string; contextWindow: number; badge?: string; vision?: boolean };
@@ -58,6 +56,7 @@ const Ico = {
   Flask:   ()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"><path d="M9 3h6l1 9H8L9 3z"/><path d="M6 21h12a1 1 0 0 0 .9-1.45L15.14 12h-6.3L5.1 19.55A1 1 0 0 0 6 21z"/></svg>,
   File:    ()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>,
   Share:   ()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>,
+  Unshare: ()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/><line x1="2" y1="2" x2="22" y2="22"/></svg>,
   Dl:      ()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>,
   Mic:     ()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>,
   Vol:     ()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>,
@@ -78,53 +77,27 @@ const Ico = {
   Palette: ()=><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="13.5" cy="6.5" r="1.5"/><circle cx="17.5" cy="10.5" r="1.5"/><circle cx="8.5" cy="7.5" r="1.5"/><circle cx="6.5" cy="12.5" r="1.5"/><path d="M12 2a10 10 0 0 0 0 20c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>,
 };
 
-// ─── Code block ───────────────────────────────────────────────
-const CodeBlock = memo(function CodeBlock({ children }: { children: React.ReactNode }) {
-  const [copied, setCopied] = useState(false);
-  const ref = useRef<HTMLPreElement>(null);
-  let lang = '';
-  try { const m = ((children as {props?:{className?:string}})?.props?.className??'').match(/language-(\w+)/); if(m) lang=m[1]; } catch {}
-  const copy = async () => { try { await navigator.clipboard.writeText(ref.current?.textContent??''); setCopied(true); setTimeout(()=>setCopied(false),2000); } catch {} };
-  return (
-    <div className="codeblock">
-      <div className="codeblock-header">
-        <span className="codeblock-lang">{lang||'code'}</span>
-        <button onClick={copy} className={`codeblock-copy ${copied?'copied':''}`}>
-          {copied ? <><Ico.Check /> Copied</> : <><Ico.Copy /> Copy</>}
-        </button>
-      </div>
-      <pre ref={ref}>{children}</pre>
-    </div>
-  );
-});
+// ─── Dropdown menu keyboard support ─────────────────────────────
+// Arrow keys move between the menu's buttons; Escape closes and refocuses the
+// trigger. Shared by the model picker, context control, and downloads menu.
+function menuKeyDown(e: React.KeyboardEvent<HTMLElement>, close: () => void) {
+  if (e.key === 'Escape') { e.preventDefault(); close(); return; }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Home' && e.key !== 'End') return;
+  const menu = e.currentTarget;
+  const items = Array.from(menu.querySelectorAll<HTMLElement>('button:not([disabled]),a[href]'));
+  if (!items.length) return;
+  e.preventDefault();
+  const i = items.indexOf(document.activeElement as HTMLElement);
+  const next = e.key === 'Home' ? 0
+    : e.key === 'End' ? items.length - 1
+    : e.key === 'ArrowDown' ? (i + 1) % items.length
+    : (i - 1 + items.length) % items.length;
+  items[next].focus();
+}
 
 // ─── Typing indicator ─────────────────────────────────────────
 const Typing = memo(function Typing() {
   return <div style={{display:'flex',alignItems:'center',gap:5,padding:'4px 0'}}><div className="dot dot-1"/><div className="dot dot-2"/><div className="dot dot-3"/></div>;
-});
-
-// ─── Source cards ─────────────────────────────────────────────
-const SourceCards = memo(function SourceCards({ sources }: { sources: Source[] }) {
-  if (!sources.length) return null;
-  return (
-    <div style={{display:'flex',gap:8,overflowX:'auto',paddingBottom:8,marginBottom:14,scrollbarWidth:'none'}}>
-      {sources.slice(0,6).map((s,i)=>{
-        let domain=''; try{domain=new URL(s.url).hostname.replace(/^www\./,'');}catch{}
-        return (
-          <a key={i} href={s.url} target="_blank" rel="noopener noreferrer" className="src" style={{flexShrink:0,width:176,padding:12,display:'block',textDecoration:'none'}}>
-            <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:6}}>
-              {/* Local letter chip — no third-party favicon service, so searched
-                  domains are never leaked off this machine. */}
-              <span aria-hidden="true" style={{width:14,height:14,borderRadius:0,background:'var(--g-dim)',border:'1px solid var(--g-bd)',color:'var(--g-text)',fontSize:9,fontWeight:700,display:'inline-flex',alignItems:'center',justifyContent:'center',flexShrink:0,textTransform:'uppercase'}}>{domain.charAt(0)||'?'}</span>
-              <span style={{fontSize:11,color:'var(--fg-4)',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontFamily:'JetBrains Mono,monospace'}}>{domain}</span>
-              <span style={{marginLeft:'auto',fontSize:10,color:'var(--fg-4)',flexShrink:0,fontFamily:'JetBrains Mono,monospace'}}>[{i+1}]</span>
-            </div>
-            <p style={{fontSize:12,color:'var(--fg-2)',lineHeight:1.4,display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',overflow:'hidden'}}>{s.title.slice(0,70)}</p>
-          </a>
-        );
-      })}
-    </div>
-  );
 });
 
 // ─── Tool-use chips ───────────────────────────────────────────
@@ -153,7 +126,7 @@ const ToolChips = memo(function ToolChips({ events }: { events: ToolEvt[] }) {
 
 // ─── Model dropdown ───────────────────────────────────────────
 type ModelDetail = { parameterSize?: string|null; quantization?: string|null };
-const ENGINE_LABEL: Record<string,string> = { llama:'llama.cpp', ollama:'Ollama', lmstudio:'LM Studio' };
+const ENGINE_LABEL: Record<string,string> = { chakor: APP.name, llama:'llama.cpp', ollama:'Ollama', lmstudio:'LM Studio' };
 
 function ModelSelect({ models, selected, onChange, loadedNames, details, isAdmin, onToggleLoad, onOpenChange, localName, engines }: {
   models: Model[]; selected: string; onChange: (id: string) => void;
@@ -163,6 +136,8 @@ function ModelSelect({ models, selected, onChange, loadedNames, details, isAdmin
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   const cur = models.find(m=>m.id===selected)??models[0];
   // The fix for "llama.cpp crashed, now what": if the engine behind the selected
   // model is down, offer the running engines (with models) as one-click switches
@@ -178,16 +153,22 @@ function ModelSelect({ models, selected, onChange, loadedNames, details, isAdmin
   },[open]);
   useEffect(()=>{ onOpenChange(open); // eslint-disable-next-line react-hooks/exhaustive-deps
   },[open]);
+  // Move focus into the menu on open so keyboard users land on the first item.
+  useEffect(()=>{
+    if(open) menuRef.current?.querySelector<HTMLElement>('button:not([disabled])')?.focus();
+  },[open]);
+  const closeMenu = ()=>{ setOpen(false); btnRef.current?.focus(); };
   if (!models.length) return null;
   return (
     <div ref={ref} style={{position:'relative'}}>
-      <button onClick={()=>setOpen(o=>!o)} className="btn-ghost-sm"
+      <button ref={btnRef} onClick={()=>setOpen(o=>!o)} className="btn-ghost-sm"
+        aria-haspopup="menu" aria-expanded={open}
         style={{gap:6, background: open ? 'var(--bg-2)' : 'transparent'}}>
         <span style={{fontSize:13,fontWeight:500,color:'var(--fg-2)'}}>{cur?.name??'Model'}</span>
         <Ico.Down/>
       </button>
       {open && (
-        <div className="anim-scale-in" style={{position:'absolute',top:'calc(100% + 6px)',left:0,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:0,boxShadow:'var(--sh-lg)',minWidth:252,maxWidth:300,overflow:'hidden'}}>
+        <div ref={menuRef} role="menu" aria-label="Choose a model" onKeyDown={e=>menuKeyDown(e,closeMenu)} className="anim-scale-in" style={{position:'absolute',top:'calc(100% + 6px)',left:0,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:0,boxShadow:'var(--sh-lg)',minWidth:252,maxWidth:300,overflow:'hidden'}}>
           {engines.length>0 && (
             <div style={{padding:'9px 11px 10px',borderBottom:'1px solid var(--bd-2)',background:'var(--bg-1)'}}>
               <div style={{fontSize:9.5,fontWeight:600,color:'var(--fg-4)',textTransform:'uppercase',letterSpacing:'0.08em',fontFamily:'JetBrains Mono,monospace',marginBottom:7}}>Engine</div>
@@ -219,7 +200,7 @@ function ModelSelect({ models, selected, onChange, loadedNames, details, isAdmin
               )}
             </div>
           )}
-          {['llama','ollama','lmstudio','openai','anthropic','google','openrouter'].map(p=>{
+          {['chakor','llama','ollama','lmstudio','openai','anthropic','google','openrouter'].map(p=>{
             const grp=models.filter(m=>m.provider===p); if(!grp.length) return null;
             return (
               <div key={p}>
@@ -230,7 +211,7 @@ function ModelSelect({ models, selected, onChange, loadedNames, details, isAdmin
                   const det=details[m.name];
                   return (
                     <div key={m.id} style={{display:'flex',alignItems:'center',background:m.id===selected?'var(--bg-3)':'transparent'}}>
-                      <button onClick={()=>{onChange(m.id);setOpen(false);}}
+                      <button role="menuitem" onClick={()=>{onChange(m.id);setOpen(false);}}
                         style={{flex:1,minWidth:0,display:'flex',alignItems:'center',justifyContent:'space-between',padding:'9px 14px',fontSize:13,color:m.id===selected?'var(--fg)':'var(--fg-2)',background:'transparent',border:'none',cursor:'pointer',fontFamily:'Newsreader,Georgia,serif',gap:8,textAlign:'left',transition:'background .1s'}}
                         onMouseEnter={e=>{if(m.id!==selected)(e.currentTarget as HTMLElement).style.background='var(--bg-3)';}}
                         onMouseLeave={e=>{if(m.id!==selected)(e.currentTarget as HTMLElement).style.background='transparent';}}>
@@ -277,11 +258,17 @@ function ContextControl({ model, localLive, isAdmin, ctxChoice, onChoose }: {
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   useEffect(()=>{
     if(!open) return;
     const h=(e:MouseEvent)=>{if(ref.current&&!ref.current.contains(e.target as Node))setOpen(false);};
     document.addEventListener('mousedown',h); return()=>document.removeEventListener('mousedown',h);
   },[open]);
+  useEffect(()=>{
+    if(open) menuRef.current?.querySelector<HTMLElement>('button:not([disabled]),a[href]')?.focus();
+  },[open]);
+  const closeMenu = ()=>{ setOpen(false); btnRef.current?.focus(); };
   if (!model) return null;
   const isLocal = model.provider === 'llama';
   const maxWin = model.contextWindow > 0 ? model.contextWindow : 0;
@@ -291,13 +278,14 @@ function ContextControl({ model, localLive, isAdmin, ctxChoice, onChoose }: {
 
   return (
     <div ref={ref} style={{position:'relative'}}>
-      <button onClick={()=>setOpen(o=>!o)} className="btn-ghost-sm" title="Context length: how much the model remembers"
+      <button ref={btnRef} onClick={()=>setOpen(o=>!o)} className="btn-ghost-sm" title="Context length: how much the model remembers"
+        aria-haspopup="menu" aria-expanded={open}
         style={{gap:5, background: open ? 'var(--bg-2)' : 'transparent'}}>
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 6h16M4 12h10M4 18h7"/></svg>
         <span style={{fontSize:12.5,fontWeight:500,color:'var(--fg-3)',fontFamily:'JetBrains Mono,monospace'}}>{label}</span>
       </button>
       {open && (
-        <div className="anim-scale-in" style={{position:'absolute',top:'calc(100% + 6px)',right:0,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:0,boxShadow:'var(--sh-lg)',width:248,overflow:'hidden'}}>
+        <div ref={menuRef} role="menu" aria-label="Context length" onKeyDown={e=>menuKeyDown(e,closeMenu)} className="anim-scale-in" style={{position:'absolute',top:'calc(100% + 6px)',right:0,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:0,boxShadow:'var(--sh-lg)',width:248,overflow:'hidden'}}>
           <div style={{padding:'10px 14px 8px'}}>
             <p style={{fontSize:12,fontWeight:600,color:'var(--fg)',margin:0}}>Context length</p>
             <p style={{fontSize:11,color:'var(--fg-4)',margin:'3px 0 0',lineHeight:1.5}}>How much of the chat the model keeps in mind. Bigger remembers more but is slower.</p>
@@ -341,23 +329,29 @@ function ContextControl({ model, localLive, isAdmin, ctxChoice, onChoose }: {
 function DownloadsButton({ jobs, onCancel }: { jobs: DownloadJob[]; onCancel: (id:string)=>void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
   useEffect(()=>{
     if(!open) return;
     const h=(e:MouseEvent)=>{if(ref.current&&!ref.current.contains(e.target as Node))setOpen(false);};
     document.addEventListener('mousedown',h); return()=>document.removeEventListener('mousedown',h);
+  },[open]);
+  useEffect(()=>{
+    if(open) menuRef.current?.querySelector<HTMLElement>('button:not([disabled])')?.focus();
   },[open]);
   const active = jobs.filter(j=>j.status==='downloading');
   if (active.length===0) return null;
   const avg = Math.round(active.reduce((n,j)=>n+j.pct,0)/active.length);
   return (
     <div ref={ref} style={{position:'relative'}}>
-      <button onClick={()=>setOpen(o=>!o)} className="btn-ghost-sm" title="Model downloads"
+      <button ref={btnRef} onClick={()=>setOpen(o=>!o)} className="btn-ghost-sm" title="Model downloads"
+        aria-haspopup="menu" aria-expanded={open}
         style={{gap:7, background: open ? 'var(--bg-2)' : 'transparent'}}>
         <span style={{width:13,height:13,border:'2px solid var(--g)',borderTopColor:'transparent',borderRadius:'50%',animation:'spin .8s linear infinite',display:'inline-block'}}/>
         <span style={{fontSize:12,fontWeight:500,color:'var(--fg-3)',fontFamily:'JetBrains Mono,monospace'}}>{active.length>1?`${active.length} · `:''}{avg}%</span>
       </button>
       {open && (
-        <div className="anim-scale-in" style={{position:'absolute',top:'calc(100% + 6px)',right:0,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:0,boxShadow:'var(--sh-lg)',width:284,overflow:'hidden'}}>
+        <div ref={menuRef} role="menu" aria-label="Model downloads" onKeyDown={e=>menuKeyDown(e,()=>{setOpen(false);btnRef.current?.focus();})} className="anim-scale-in" style={{position:'absolute',top:'calc(100% + 6px)',right:0,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:0,boxShadow:'var(--sh-lg)',width:284,overflow:'hidden'}}>
           <div style={{padding:'10px 14px 8px'}}>
             <p style={{fontSize:12,fontWeight:600,color:'var(--fg)',margin:0}}>Downloading models</p>
             <p style={{fontSize:11,color:'var(--fg-4)',margin:'3px 0 0',lineHeight:1.5}}>Runs on the server. Safe to close this tab.</p>
@@ -405,22 +399,24 @@ const ConvItem = memo(function ConvItem({ conv, active, folders, onClick, onDele
   );
   return (
     <div onClick={onClick} className={`conv-item ${active?'active':''}`}
+      role="button" tabIndex={0} aria-label={`Open conversation: ${conv.title}`} aria-current={active?'true':undefined}
+      onKeyDown={e=>{if(e.target===e.currentTarget&&(e.key==='Enter'||e.key===' ')){e.preventDefault();onClick();}}}
       style={{color:active?'var(--fg)':'var(--fg-3)'}}
       onMouseEnter={e=>{if(!active)(e.currentTarget as HTMLElement).style.background='var(--bg-2)';}}
       onMouseLeave={e=>{if(!active)(e.currentTarget as HTMLElement).style.background='transparent';}}>
       {conv.pinned?<span style={{flexShrink:0,color:'var(--g)',opacity:.7,display:'inline-flex'}}><Ico.Pin/></span>:null}
       <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:13.5}}>{conv.title}</span>
       <div ref={ref} style={{position:'relative',flexShrink:0}} onClick={e=>e.stopPropagation()}>
-        <button onClick={e=>{e.stopPropagation();setMenu(o=>!o);}} className="btn-ghost-sm"
-          style={{padding:'6px 7px',opacity:menu?1:0}}
-          onMouseEnter={e=>(e.currentTarget as HTMLElement).style.opacity='1'}
-          onMouseLeave={e=>{if(!menu)(e.currentTarget as HTMLElement).style.opacity='0';}}
-          onFocus={e=>(e.currentTarget as HTMLElement).style.opacity='1'}
-          onBlur={e=>{if(!menu)(e.currentTarget as HTMLElement).style.opacity='0';}}>
+        {/* Visibility comes from CSS (.conv-item:hover .msg-actions, focus-within,
+            and forced-on for touch); inline opacity only pins it open while the
+            menu is up. */}
+        <button onClick={e=>{e.stopPropagation();setMenu(o=>!o);}} className="btn-ghost-sm msg-actions"
+          aria-label={`Options for ${conv.title}`} aria-haspopup="menu" aria-expanded={menu}
+          style={{padding:'6px 7px',opacity:menu?1:undefined}}>
           <Ico.Dots/>
         </button>
         {menu && (
-          <div className="anim-scale-in" style={{position:'absolute',right:0,top:'100%',marginTop:4,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:0,boxShadow:'var(--sh-lg)',overflow:'hidden',minWidth:172}}>
+          <div role="menu" onKeyDown={e=>menuKeyDown(e,()=>setMenu(false))} className="anim-scale-in" style={{position:'absolute',right:0,top:'100%',marginTop:4,zIndex:50,background:'var(--bg-2)',border:'1px solid var(--bd-2)',borderRadius:0,boxShadow:'var(--sh-lg)',overflow:'hidden',minWidth:172}}>
             {row(<><Ico.Pin/> {conv.pinned?'Unpin':'Pin to top'}</>, e=>{e.stopPropagation();onPin();setMenu(false);})}
             {row(<><Ico.Folder/> Move to folder</>, e=>{e.stopPropagation();setMoveOpen(o=>!o);})}
             {moveOpen && (
@@ -445,19 +441,19 @@ const ConvItem = memo(function ConvItem({ conv, active, folders, onClick, onDele
 
 // ─── Message bubble ───────────────────────────────────────────
 const MsgBubble = memo(function MsgBubble({ msg, onEdit, onRegen, tts, density, showStats, userInits }: {
-  msg: Msg & {id?: string}; onEdit?: ()=>void; onRegen?: ()=>void;
+  msg: Msg; onEdit?: ()=>void; onRegen?: ()=>void;
   tts: ReturnType<typeof useTextToSpeech>; density: 'compact'|'comfortable'; showStats?: boolean; userInits?: string;
 }) {
   const [copied, setCopied] = useState(false);
   const isUser = msg.role === 'user';
-  const id = msg.id ?? msg.dbId?.toString() ?? '';
+  const id = msg.dbId?.toString() ?? (msg.cid != null ? `c${msg.cid}` : '');
   const speaking = tts.speaking && tts.speakingId === id;
   const mb = density === 'compact' ? 16 : 28;
   const copy = async () => { try { await navigator.clipboard.writeText(msg.content); setCopied(true); setTimeout(()=>setCopied(false),2000); } catch {} };
 
   if (isUser) {
     return (
-      <div className="anim-msg-in" style={{display:'flex',justifyContent:'flex-end',marginBottom:mb}}>
+      <div className="msg anim-msg-in" style={{display:'flex',justifyContent:'flex-end',marginBottom:mb}}>
         <div style={{display:'flex',alignItems:'flex-end',gap:10,maxWidth:'78%'}}>
           <div>
             {msg.images&&msg.images.length>0&&(
@@ -485,7 +481,7 @@ const MsgBubble = memo(function MsgBubble({ msg, onEdit, onRegen, tts, density, 
   }
 
   return (
-    <div className="anim-msg-in" style={{display:'flex',gap:12,marginBottom:mb}}>
+    <div className="msg anim-msg-in" style={{display:'flex',gap:12,marginBottom:mb}}>
       <div style={{flexShrink:0,marginTop:3}} className="chakor-mark">
         <ChakorMark size={26}/>
       </div>
@@ -495,31 +491,8 @@ const MsgBubble = memo(function MsgBubble({ msg, onEdit, onRegen, tts, density, 
         {msg.streaming && !msg.content
           ? <Typing/>
           : (
-            <div className="prose-ai">
-              <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}
-                components={{
-                  pre:    ({children})=><CodeBlock>{children}</CodeBlock>,
-                  code:   ({className,children,...p})=><code className={className} {...p}>{children}</code>,
-                  a:      ({href,children})=><a href={href} target="_blank" rel="noopener noreferrer">{children}</a>,
-                  p:      ({children})=><p>{children}</p>,
-                  ul:     ({children})=><ul>{children}</ul>,
-                  ol:     ({children})=><ol>{children}</ol>,
-                  li:     ({children})=><li>{children}</li>,
-                  h1:     ({children})=><h1>{children}</h1>,
-                  h2:     ({children})=><h2>{children}</h2>,
-                  h3:     ({children})=><h3>{children}</h3>,
-                  h4:     ({children})=><h4>{children}</h4>,
-                  blockquote:({children})=><blockquote>{children}</blockquote>,
-                  hr:     ()=><hr/>,
-                  strong: ({children})=><strong>{children}</strong>,
-                  em:     ({children})=><em>{children}</em>,
-                  table:  ({children})=><div style={{overflowX:'auto'}}><table>{children}</table></div>,
-                  th:     ({children})=><th>{children}</th>,
-                  td:     ({children})=><td>{children}</td>,
-                  tr:     ({children})=><tr>{children}</tr>,
-                }}>
-                {msg.streaming ? msg.content+'▋' : msg.content}
-              </ReactMarkdown>
+            <div className="prose-ai" aria-live={msg.streaming?'off':undefined}>
+              <Markdown>{msg.streaming ? msg.content+'▋' : msg.content}</Markdown>
             </div>
           )
         }
@@ -635,7 +608,7 @@ function DocsPanel({ docs, uploading, uploadError, onUpload, onDelete, onClose }
                 </>
             }
           </div>
-          <input ref={ref} type="file" accept=".pdf,.txt,.md" style={{display:'none'}} onChange={e=>e.target.files?.[0]&&onUpload(e.target.files[0])} disabled={uploading}/>
+          <input ref={ref} type="file" accept=".pdf,.txt,.md" style={{display:'none'}} onChange={e=>{const f=e.target.files?.[0]; if(f)onUpload(f); e.currentTarget.value='';}} disabled={uploading}/>
           {uploadError&&<p style={{fontSize:12,color:'var(--err)',marginTop:8}}>{uploadError}</p>}
         </div>
         <div style={{flex:1,overflowY:'auto'}}>
@@ -673,7 +646,7 @@ function DocsPanel({ docs, uploading, uploadError, onUpload, onDelete, onClose }
 // ─── Toast ────────────────────────────────────────────────────
 function Toasts({ items, onDismiss }: { items: Toast[]; onDismiss: (id:number)=>void }) {
   return (
-    <div style={{position:'fixed',top:16,right:16,zIndex:200,display:'flex',flexDirection:'column',gap:8,pointerEvents:'none'}}>
+    <div role="status" aria-live="polite" style={{position:'fixed',top:16,right:16,zIndex:200,display:'flex',flexDirection:'column',gap:8,pointerEvents:'none'}}>
       {items.map(t=>(
         <div key={t.id} className="toast" style={{display:'flex',alignItems:'center',gap:10,padding:'11px 15px',background:'var(--bg-2)',border:`1px solid ${t.ok?'rgba(74,222,128,.18)':'rgba(248,113,113,.18)'}`,borderRadius:0,boxShadow:'var(--sh-lg)',fontSize:13,color:'var(--fg)',maxWidth:340,pointerEvents:'auto'}}>
           <span style={{color:t.ok?'var(--ok)':'var(--err)',fontSize:12,flexShrink:0}}>{t.ok?'✓':'✕'}</span>
@@ -720,8 +693,10 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   const [researching, setResearching] = useState(false);
   const [useRag, setUseRag] = useState(true);
   const [input, setInput] = useState('');
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isDesktop, setIsDesktop] = useState(false);
+  // Lazy-init from the viewport so desktop loads don't flash the sidebar
+  // closed-then-open (window is undefined during SSR, so both start closed there).
+  const [sidebarOpen, setSidebarOpen] = useState(()=>typeof window!=='undefined'&&window.innerWidth>=768);
+  const [isDesktop, setIsDesktop] = useState(()=>typeof window!=='undefined'&&window.innerWidth>=768);
   const [editTitle, setEditTitle] = useState(false);
   const [titleVal, setTitleVal] = useState('');
   const [loadingConv, setLoadingConv] = useState(false);
@@ -760,6 +735,14 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   const [promptsOpen, setPromptsOpen] = useState(false);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const tid = useRef(0);
+  // Conversation load failure: shown in the message pane with a retry button.
+  const [convError, setConvError] = useState<string|null>(null);
+  // "↓ New messages" pill when the user scrolls up during streaming.
+  const [showJump, setShowJump] = useState(false);
+  // Client-side ids for messages that have no dbId yet, so React keys stay
+  // stable when the list is sliced by edit/regen.
+  const cidRef = useRef(0);
+  const titleSaving = useRef(false);
   // Agent Workspace: when on, messages go to the ReAct agent instead of /api/chat.
   const [agentMode, setAgentMode] = useState(false);
   const workspaceRef = useRef<AgentWorkspaceHandle>(null);
@@ -777,7 +760,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   const loadToken = useRef(0);
 
   function toast(msg: string, ok=true) { const id=++tid.current; setToasts(p=>[...p,{id,msg,ok}]); setTimeout(()=>setToasts(p=>p.filter(t=>t.id!==id)),4000); }
-  function onScroll() { const el=scrollRef.current; if(el) atBottom.current=el.scrollHeight-el.scrollTop-el.clientHeight<100; }
+  function onScroll() { const el=scrollRef.current; if(!el) return; const at=el.scrollHeight-el.scrollTop-el.clientHeight<100; atBottom.current=at; setShowJump(!at); }
   useEffect(()=>{
     if(!atBottom.current) return;
     if(msgs.length===0) return; // empty conversation shows the welcome front page from the top
@@ -841,7 +824,13 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[streaming,showExport,docsOpen,promptsOpen,toolsOpen]);
   useEffect(()=>{
-    if(speech.transcript){ setInput(p=>{const b=p.replace(speech.interimTranscript,'').trimEnd(); return b+(b?' ':'')+speech.transcript;}); speech.reset(); }
+    if(speech.transcript){ setInput(p=>{
+      // The interim text was appended live at the end; strip only that trailing
+      // occurrence, never text the user typed before or after it.
+      const it=speech.interimTranscript;
+      const b=it&&p.endsWith(it)?p.slice(0,p.length-it.length).trimEnd():p;
+      return b+(b?' ':'')+speech.transcript;
+    }); speech.reset(); }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[speech.transcript]);
 
@@ -858,7 +847,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   // For the local model, trust what llama-server actually reports about itself
   // (so switching to a vision GGUF lights up image attach without a config flag).
   const visionOk = curModel?.provider==='llama' ? (localLive?.vision ?? !!curModel?.vision) : !!curModel?.vision;
-  const toolsOk = !!curModel && ['openai','openrouter','ollama','lmstudio','llama'].includes(curModel.provider);
+  const toolsOk = !!curModel && ['openai','openrouter','ollama','lmstudio','llama','chakor'].includes(curModel.provider);
   const canSend = input.trim().length>0 || images.length>0;
 
   const loadConv = useCallback(async(id:string)=>{
@@ -868,14 +857,28 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
     abortRef.current?.abort();
     streamToken.current++;
     const myLoad = ++loadToken.current;
-    setLoadingConv(true); setMsgs([]); setActiveId(id);
+    setLoadingConv(true); setMsgs([]); setActiveId(id); setConvError(null);
     try {
       const r=await fetch(`/api/conversations/${id}`);
-      if(r.ok){const d=await r.json(); if(loadToken.current!==myLoad) return; setMsgs((d.messages as {id:number;role:string;content:string;images?:string[]}[]).filter(m=>m.role==='user'||m.role==='assistant').map(m=>({role:m.role as 'user'|'assistant',content:m.content,dbId:m.id,images:m.images}))); setTitleVal(d.title);}
+      if(!r.ok) throw new Error(`HTTP ${r.status}`);
+      const d=await r.json();
+      if(loadToken.current!==myLoad) return;
+      setMsgs((d.messages as {id:number;role:string;content:string;images?:string[];sources?:Source[]}[]).filter(m=>m.role==='user'||m.role==='assistant').map(m=>({role:m.role as 'user'|'assistant',content:m.content,dbId:m.id,images:m.images,sources:m.sources})));
+      setTitleVal(d.title);
+    } catch {
+      if(loadToken.current!==myLoad) return;
+      setConvError('Could not load this conversation.');
+      toast('Could not load conversation',false);
     } finally { if(loadToken.current===myLoad) setLoadingConv(false); }
   // abortRef is a stable object held in state; it never changes identity.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
+
+  // Focus the composer and recompute its auto-grown height after putting text
+  // in it from outside (edit, suggestion, saved prompt).
+  function focusComposer() {
+    requestAnimationFrame(()=>{const el=taRef.current;if(el){el.focus();el.style.height='auto';el.style.height=Math.min(el.scrollHeight,180)+'px';}});
+  }
 
   function startNew() { if(window.innerWidth<768)setSidebarOpen(false); abortRef.current?.abort(); streamToken.current++; loadToken.current++; setActiveId(null); setMsgs([]); setTitleVal(''); setEditTitle(false); taRef.current?.focus(); }
   async function deleteConv(id:string,e:React.MouseEvent) { e.stopPropagation(); if(!window.confirm('Delete this conversation? This cannot be undone.')) return; try { const r=await fetch(`/api/conversations/${id}`,{method:'DELETE'}); if(!r.ok){toast('Could not delete conversation',false);return;} } catch { toast('Network error',false); return; } setConvs(p=>p.filter(c=>c.id!==id)); if(activeId===id) startNew(); else toast('Conversation deleted'); }
@@ -924,14 +927,58 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
     try { const r=await fetch('/api/models/loaded',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,action:loaded?'unload':'load'})}); const d=await r.json(); if(!r.ok) toast(d.error??'Failed',false); else toast(loaded?`Unloaded ${name}`:`Loaded ${name}`); } catch { toast('Network error',false); }
     refreshLoaded();
   }
-  async function saveTitle() { if(!activeId||!titleVal.trim()){setEditTitle(false);return;} const t=titleVal.trim().slice(0,100); await fetch(`/api/conversations/${activeId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:t})}); setConvs(p=>p.map(c=>c.id===activeId?{...c,title:t}:c)); setEditTitle(false); }
+  async function saveTitle() {
+    // Enter fires saveTitle and then unmounting the input fires blur: without
+    // this guard the title is PATCHed twice.
+    if(titleSaving.current) return;
+    if(!activeId||!titleVal.trim()){setEditTitle(false);return;}
+    titleSaving.current=true;
+    const t=titleVal.trim().slice(0,100);
+    setEditTitle(false);
+    try {
+      const r=await fetch(`/api/conversations/${activeId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:t})});
+      if(!r.ok) throw new Error();
+      setConvs(p=>p.map(c=>c.id===activeId?{...c,title:t}:c));
+    } catch { toast('Could not rename conversation',false); }
+    finally { titleSaving.current=false; }
+  }
   async function refreshTitle(id:string) { const r=await fetch(`/api/conversations/${id}`); if(!r.ok) return; const d=await r.json(); setConvs(p=>p.map(c=>c.id===id?{...c,title:d.title,updated_at:d.updated_at}:c)); if(activeId===id) setTitleVal(d.title); }
-  async function handleEdit(idx:number) { const m=msgs[idx]; if(!m||m.role!=='user') return; if(activeId&&m.dbId) await fetch(`/api/conversations/${activeId}/truncate`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fromMessageId:m.dbId})}); setMsgs(p=>p.slice(0,idx)); setInput(m.content); taRef.current?.focus(); }
-  async function handleRegen(idx:number) { const am=msgs[idx]; if(!am||am.role!=='assistant') return; if(activeId&&am.dbId) await fetch(`/api/conversations/${activeId}/truncate`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fromMessageId:am.dbId})}); const prior=msgs.slice(0,idx); const lastUser=[...prior].reverse().find(m=>m.role==='user'); if(!lastUser) return; setMsgs(prior); await sendMsg(lastUser.content,prior,lastUser.images); }
+  // Server-side truncation for edit/regen. If it fails we must NOT slice the UI,
+  // otherwise the DB and the screen disagree about what the conversation is.
+  async function truncateFrom(dbId:number) {
+    if(!activeId) return true; // unsaved conversation: nothing on the server yet
+    try {
+      const r=await fetch(`/api/conversations/${activeId}/truncate`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({fromMessageId:dbId})});
+      return r.ok;
+    } catch { return false; }
+  }
+  async function handleEdit(idx:number) {
+    const m=msgs[idx]; if(!m||m.role!=='user') return;
+    if(m.dbId&&!(await truncateFrom(m.dbId))){toast('Could not edit: the server rejected the change',false);return;}
+    setMsgs(p=>p.slice(0,idx));
+    setInput(m.content);
+    if(m.images?.length) setImages(m.images);
+    focusComposer();
+  }
+  async function handleRegen(idx:number) {
+    const am=msgs[idx]; if(!am||am.role!=='assistant') return;
+    if(am.dbId&&!(await truncateFrom(am.dbId))){toast('Could not retry: the server rejected the change',false);return;}
+    const prior=msgs.slice(0,idx); const lastUser=[...prior].reverse().find(m=>m.role==='user'); if(!lastUser) return; setMsgs(prior); await sendMsg(lastUser.content,prior,lastUser.images);
+  }
   async function uploadDoc(file:File) { setUploading(true); setUploadErr(null); try { const form=new FormData(); form.append('file',file); const r=await fetch('/api/documents',{method:'POST',body:form}); const d=await r.json(); if(!r.ok){setUploadErr(d.error??'Upload failed');return;} const list=await(await fetch('/api/documents')).json(); setDocs(Array.isArray(list)?list:[]); toast('Document uploaded'); } catch { setUploadErr('Network error.'); } finally { setUploading(false); } }
   async function deleteDoc(id:number) { await fetch(`/api/documents/${id}`,{method:'DELETE'}); setDocs(p=>p.filter(d=>d.id!==id)); }
   function exportConv(fmt:'md'|'json') { const title=curConv?.title??'conversation'; const safe=title.replace(/[^a-z0-9]/gi,'-').toLowerCase(); const content=fmt==='md'?`# ${title}\n\n${toMd(msgs)}`:JSON.stringify({title,messages:msgs},null,2); const blob=new Blob([content],{type:fmt==='md'?'text/markdown':'application/json'}); const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=`${safe}.${fmt}`; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000); setShowExport(false); }
-  async function shareConv() { if(!activeId) return; try { const r=await fetch(`/api/conversations/${activeId}/share`,{method:'POST'}); const d=await r.json(); if(!r.ok) return; await navigator.clipboard.writeText(`${window.location.origin}/share/${d.slug}`); toast('Share link copied'); } catch { toast('Failed to share',false); } }
+  async function shareConv() { if(!activeId) return; try { const r=await fetch(`/api/conversations/${activeId}/share`,{method:'POST'}); const d=await r.json(); if(!r.ok){toast(d.error??'Failed to share',false);return;} await navigator.clipboard.writeText(`${window.location.origin}/share/${d.slug}`); toast('Share link copied'); } catch { toast('Failed to share',false); } }
+  async function unshareConv() {
+    if(!activeId) return;
+    try {
+      const r=await fetch(`/api/conversations/${activeId}/share`,{method:'DELETE'});
+      if(r.ok) toast('Share link revoked');
+      // 404: either nothing was shared, or the revoke endpoint is not deployed yet.
+      else if(r.status===404) toast('No active share link for this conversation',false);
+      else toast('Could not revoke the link',false);
+    } catch { toast('Network error',false); }
+  }
 
   async function savePrompt() {
     const body=input.trim(); if(!body){toast('Type something to save first',false);return;}
@@ -939,7 +986,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
     try { const r=await fetch('/api/prompts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title,body})}); const d=await r.json(); if(r.ok){setPrompts(p=>[d,...p]);toast('Prompt saved');} else toast(d.error??'Failed to save',false); } catch { toast('Network error',false); }
   }
   async function deletePrompt(id:number) { await fetch(`/api/prompts/${id}`,{method:'DELETE'}); setPrompts(p=>p.filter(x=>x.id!==id)); }
-  function applyPrompt(body:string) { setInput(prev=>prev.trim()?prev.replace(/\s*$/,'')+'\n'+body:body); setPromptsOpen(false); requestAnimationFrame(()=>{const el=taRef.current;if(el){el.focus();el.style.height='auto';el.style.height=Math.min(el.scrollHeight,180)+'px';}}); }
+  function applyPrompt(body:string) { setInput(prev=>prev.trim()?prev.replace(/\s*$/,'')+'\n'+body:body); setPromptsOpen(false); focusComposer(); }
   async function importConv(file:File) {
     try { const data=JSON.parse(await file.text()); const r=await fetch('/api/conversations/import',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}); const conv=await r.json(); if(!r.ok){toast(conv.error??'Import failed',false);return;} setConvs(p=>[conv,...p]); toast('Conversation imported'); loadConv(conv.id); } catch { toast('Could not read that file',false); }
   }
@@ -973,10 +1020,11 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   async function sendMsg(text:string, priorOverride?:Msg[], imagesArg?:string[]) {
     const imgs=imagesArg??[];
     if((!text.trim()&&imgs.length===0)||streaming) return;
-    atBottom.current=true;
+    atBottom.current=true; setShowJump(false);
     const isFirst=(priorOverride??msgs).length===0;
     if(useDeep) setResearching(true);
-    setMsgs(p=>[...(priorOverride??p),{role:'user',content:text,images:imgs.length?imgs:undefined},{role:'assistant',content:'',streaming:true}]);
+    const userCid=++cidRef.current, assistantCid=++cidRef.current;
+    setMsgs(p=>[...(priorOverride??p),{role:'user',content:text,images:imgs.length?imgs:undefined,cid:userCid},{role:'assistant',content:'',streaming:true,cid:assistantCid}]);
     setStreaming(true);
     const ctrl=new AbortController(); abortRef.current=ctrl; let acc=''; let resolvedId:string|null=activeId;
     const myToken=++streamToken.current;
@@ -985,10 +1033,19 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
     // no-ops, so a late delta can never land on the wrong conversation.
     const updateMsgs=(fn:(prev:Msg[])=>Msg[])=>setMsgs(prev=>streamToken.current===myToken?fn(prev):prev);
     let assistantMsgId:number|null=null;
+    // Deltas arrive in bursts; repainting ReactMarkdown + highlight per burst
+    // defeats the memoized bubble, so buffer text and flush at most every 80ms.
+    // `ended` flips at stream end so the final flush clears the streaming flag.
+    let ended=false;
+    let flushTimer:ReturnType<typeof setTimeout>|null=null;
+    const flush=()=>{
+      if(flushTimer){clearTimeout(flushTimer);flushTimer=null;}
+      updateMsgs(prev=>{const u=[...prev];u[u.length-1]={...u[u.length-1],content:acc,streaming:!ended};return u;});
+    };
+    const scheduleFlush=()=>{ if(!flushTimer) flushTimer=setTimeout(flush,80); };
     try {
       const ctxToSend = curModel?.provider==='llama' ? (localLive?.nCtx ?? undefined) : (ctxChoice ?? undefined);
       const r=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversationId:activeId||undefined,message:text,useSearch:useSearch&&!useDeep,useDeepResearch:useDeep,useRag:ragActive,modelId:modelId||undefined,images:imgs.length?imgs:undefined,tools:toolIds.length?toolIds:undefined,contextSize:ctxToSend}),signal:ctrl.signal});
-      setResearching(false);
       if(!r.ok){ let msg=`Request failed (HTTP ${r.status})`; try{const d=await r.json(); if(typeof d?.error==='string'&&d.error) msg=d.error;}catch{} throw new Error(msg); }
       const newId=r.headers.get('X-Conversation-Id');
       if(newId&&!activeId){resolvedId=newId;setActiveId(newId);setConvs(p=>[{id:newId,title:'New conversation',model:modelId||'chakor',created_at:Math.floor(Date.now()/1000),updated_at:Math.floor(Date.now()/1000)},...p]);}
@@ -996,26 +1053,29 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
       outer:while(true){const{done,value}=await reader.read(); if(done) break; buf+=dec.decode(value,{stream:true}); const parts=buf.split('\n\n'); buf=parts.pop()??'';
         for(const part of parts){const lines=part.split('\n').filter(l=>l.startsWith('data:')); if(!lines.length) continue; const data=lines.map(l=>l.slice(5)).join('\n').trim(); if(data==='[DONE]') break outer;
           try{const p=JSON.parse(data) as {delta?:string;sources?:Source[];stats?:Stats;userMsgId?:number;assistantMsgId?:number;toolEvent?:ToolEvt};
+            // The research phase is over once sources or the first content
+            // delta arrive — that's when the "Researching…" banner goes away.
+            if((p.sources||p.delta)&&useDeep) setResearching(false);
             if(p.userMsgId) updateMsgs(prev=>{const u=[...prev];const i=u.length-2;if(i>=0&&u[i].role==='user')u[i]={...u[i],dbId:p.userMsgId};return u;});
             if(p.assistantMsgId){assistantMsgId=p.assistantMsgId; updateMsgs(prev=>{const u=[...prev];u[u.length-1]={...u[u.length-1],dbId:p.assistantMsgId};return u;});}
             if(p.sources) updateMsgs(prev=>{const u=[...prev];u[u.length-1]={...u[u.length-1],sources:p.sources};return u;});
             if(p.stats) updateMsgs(prev=>{const u=[...prev];u[u.length-1]={...u[u.length-1],stats:p.stats};return u;});
             if(p.toolEvent) updateMsgs(prev=>{const u=[...prev];const last=u[u.length-1];u[u.length-1]={...last,toolEvents:[...(last.toolEvents??[]),p.toolEvent!]};return u;});
-            if(p.delta){acc+=p.delta;updateMsgs(prev=>{const u=[...prev];u[u.length-1]={...u[u.length-1],content:acc,streaming:true};return u;});}
+            if(p.delta){acc+=p.delta;scheduleFlush();}
           }catch{}
         }
       }
     } catch(err) {
-      setResearching(false);
       if(!(err instanceof Error&&err.name==='AbortError')){
+        // Fold the error into the buffered text so the final flush paints it.
         const msg=err instanceof Error&&err.message?err.message:'Connection error. Please try again.';
-        updateMsgs(p=>{const u=[...p];u[u.length-1]={role:'assistant',content:acc||`*${msg}*`};return u;});
+        if(!acc) acc=`*${msg}*`;
       }
     } finally {
+      ended=true; flush(); // final paint, with the streaming flag cleared
       abortRef.current=null; setStreaming(false); setResearching(false);
-      updateMsgs(p=>{const u=[...p];if(u.length>0)u[u.length-1]={...u[u.length-1],streaming:false};return u;});
       if(isFirst&&resolvedId) setTimeout(()=>refreshTitle(resolvedId!),1500);
-      if(autoRead&&tts.supported&&acc&&streamToken.current===myToken) tts.speak(acc,(assistantMsgId??msgs.length).toString());
+      if(autoRead&&tts.supported&&acc&&streamToken.current===myToken) tts.speak(acc,String(assistantMsgId??`c${assistantCid}`));
     }
   }
 
@@ -1023,29 +1083,38 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   // answer lands here as a normal assistant message.
   async function handleAgentSend(text:string) {
     const myToken=++streamToken.current;
-    setMsgs(p=>[...p,{role:'user',content:text},{role:'assistant',content:'',streaming:true}]);
+    const ctrl=new AbortController(); abortRef.current=ctrl;
+    const assistantCid=++cidRef.current;
+    setMsgs(p=>[...p,{role:'user',content:text,cid:++cidRef.current},{role:'assistant',content:'',streaming:true,cid:assistantCid}]);
     setStreaming(true);
     try {
       await workspaceRef.current?.runAgent(text,(answer)=>{
         if(streamToken.current!==myToken) return;
         setMsgs(p=>{const u=[...p];u[u.length-1]={...u[u.length-1],content:answer,streaming:false};return u;});
-      });
+      },ctrl.signal);
     } finally {
       if(streamToken.current===myToken){
+        const stopped=ctrl.signal.aborted;
         setMsgs(p=>{const u=[...p];const last=u[u.length-1];
           if(last&&last.role==='assistant'){
             u[u.length-1]={...last,
-              content:last.content||'*The agent stopped before giving a final answer. Check the Activity panel for what happened.*',
+              content:last.content||(stopped
+                ? '*Stopped. The agent halted mid-run — check the Activity panel for how far it got.*'
+                : '*The agent stopped before giving a final answer. Check the Activity panel for what happened.*'),
               streaming:false};
           }
           return u;});
       }
+      abortRef.current=null;
       setStreaming(false);
     }
   }
 
   async function handleSend() {
     const text=input.trim(); if((!text&&images.length===0)||streaming) return;
+    // The agent endpoint is text-only; images would be silently dropped, so
+    // stop here instead of falling through to the wrong API.
+    if(agentMode&&images.length>0){toast('The agent can\'t read images yet — turn Agent Mode off to send them',false);return;}
     const imgs=images; setInput(''); setImages([]); if(taRef.current) taRef.current.style.height='auto';
     if(agentMode&&text){ await handleAgentSend(text); return; }
     await sendMsg(text,undefined,imgs);
@@ -1060,6 +1129,10 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   return (
     <div style={{display:'flex',height:'100dvh',overflow:'hidden',background:'var(--bg)',fontFamily:'Newsreader,Georgia,serif'}}>
       <Toasts items={toasts} onDismiss={id=>setToasts(p=>p.filter(t=>t.id!==id))}/>
+      {/* Polite announcements for generation state (deltas themselves are off). */}
+      <span className="sr-only" role="status" aria-live="polite">
+        {researching?'Researching across multiple sources':streaming?'Assistant is writing a response':''}
+      </span>
 
       {/* Mobile overlay */}
       {sidebarOpen && <div style={{position:'fixed',inset:0,zIndex:20,background:'rgba(0,0,0,0.55)'}} className="md:hidden" onClick={()=>setSidebarOpen(false)}/>}
@@ -1251,6 +1324,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
                   )}
                 </div>
                 <IcoBtn onClick={shareConv} title="Share"><Ico.Share/></IcoBtn>
+                <IcoBtn onClick={unshareConv} title="Revoke share link" ariaLabel="Revoke share link"><Ico.Unshare/></IcoBtn>
               </>
             )}
           </div>
@@ -1264,22 +1338,43 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
         )}
 
         {/* Messages */}
+        <div style={{position:'relative',flex:1,display:'flex',flexDirection:'column',minHeight:0}}>
         <div ref={scrollRef} onScroll={onScroll} style={{flex:1,overflowY:'auto'}}>
           <div style={{maxWidth:740,margin:'0 auto',padding:'28px 20px'}}>
-            {!activeId&&msgs.length===0&&<Welcome name={user.name} onSelect={setInput} taRef={taRef}/>}
+            {!activeId&&msgs.length===0&&<Welcome name={user.name} onSelect={p=>{setInput(p);focusComposer();}} taRef={taRef}/>}
             {loadingConv&&msgs.length===0&&(
-              <div style={{display:'flex',flexDirection:'column',alignItems:'center',gap:12,padding:'60px 0'}}>
-                <Typing/><p style={{fontSize:13,color:'var(--fg-4)'}}>Loading…</p>
+              <div style={{display:'flex',flexDirection:'column',gap:14,padding:'24px 0'}} aria-busy="true">
+                {[72,88,56].map(w=>(
+                  <div key={w} style={{display:'flex',gap:12}}>
+                    <div className="skel" style={{width:26,height:26,borderRadius:'50%',flexShrink:0}}/>
+                    <div style={{flex:1,display:'flex',flexDirection:'column',gap:8}}>
+                      <div className="skel" style={{height:13,width:`${w}%`}}/>
+                      <div className="skel" style={{height:13,width:`${Math.max(w-24,30)}%`}}/>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {convError&&!loadingConv&&(
+              <div role="alert" style={{display:'flex',flexDirection:'column',alignItems:'center',gap:12,padding:'60px 0',textAlign:'center'}}>
+                <p style={{fontSize:14,color:'var(--fg-3)',margin:0}}>{convError}</p>
+                <button onClick={()=>{if(activeId)loadConv(activeId);}} className="btn btn-outline" style={{fontSize:12,padding:'8px 18px'}}>Try again</button>
               </div>
             )}
             {msgs.map((m,i)=>(
-              <MsgBubble key={i} msg={m}
+              <MsgBubble key={m.dbId!=null?`db${m.dbId}`:`c${m.cid??i}`} msg={m}
                 onEdit={m.role==='user'&&!streaming?()=>handleEdit(i):undefined}
                 onRegen={m.role==='assistant'&&!streaming&&i===msgs.length-1?()=>handleRegen(i):undefined}
                 tts={tts} density={density} showStats={showStats} userInits={userInits}/>
             ))}
             <div ref={endRef}/>
           </div>
+        </div>
+        {showJump&&msgs.length>0&&(
+          <button className="scroll-pill anim-fade-in" onClick={()=>{atBottom.current=true;setShowJump(false);endRef.current?.scrollIntoView({behavior:'smooth'});}}>
+            ↓ New messages
+          </button>
+        )}
         </div>
 
         {/* Input */}
@@ -1353,9 +1448,9 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
             <div style={{background:'var(--bg-2)',border:`1px solid ${dragImg?'var(--g)':'var(--bd-2)'}`,borderRadius:0,transition:'border-color .15s, box-shadow .15s'}}
               onFocusCapture={e=>{ const el=e.currentTarget as HTMLElement; el.style.borderColor='var(--g-bd)'; el.style.boxShadow='0 0 0 3px var(--g-dim)'; }}
               onBlurCapture={e=>{ const el=e.currentTarget as HTMLElement; el.style.borderColor='var(--bd-2)'; el.style.boxShadow='none'; }}
-              onDragOver={e=>{if(visionOk){e.preventDefault();setDragImg(true);}}}
+              onDragOver={e=>{if(visionOk&&!agentMode){e.preventDefault();setDragImg(true);}}}
               onDragLeave={()=>setDragImg(false)}
-              onDrop={e=>{setDragImg(false);if(visionOk&&e.dataTransfer.files.length){e.preventDefault();addImages(e.dataTransfer.files);}}}>
+              onDrop={e=>{setDragImg(false);if(visionOk&&!agentMode&&e.dataTransfer.files.length){e.preventDefault();addImages(e.dataTransfer.files);}}}>
               {images.length>0&&(
                 <div style={{display:'flex',gap:8,flexWrap:'wrap',padding:'12px 14px 0'}}>
                   {images.map((src,i)=>(
@@ -1369,9 +1464,9 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
                 </div>
               )}
               <div style={{padding:'12px 14px 8px'}}>
-                <textarea ref={taRef} value={input} onChange={e=>setInput(e.target.value)}
+                <textarea ref={taRef} value={input} onChange={e=>setInput(e.target.value)} aria-label="Message"
                   onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();handleSend();}}}
-                  onPaste={e=>{if(!visionOk)return;const imgs=Array.from(e.clipboardData.items).filter(it=>it.type.startsWith('image/')).map(it=>it.getAsFile()).filter((f):f is File=>!!f);if(imgs.length){e.preventDefault();addImages(imgs);}}}
+                  onPaste={e=>{if(!visionOk||agentMode)return;const imgs=Array.from(e.clipboardData.items).filter(it=>it.type.startsWith('image/')).map(it=>it.getAsFile()).filter((f):f is File=>!!f);if(imgs.length){e.preventDefault();addImages(imgs);}}}
                   rows={1} disabled={streaming}
                   placeholder={agentMode?'Tell the agent what to create…':`Message ${APP.name}…`}
                   style={{width:'100%',background:'transparent',border:'none',outline:'none',resize:'none',color:'var(--fg)',fontFamily:'Newsreader,Georgia,serif',fontSize:15,lineHeight:1.7,minHeight:26,maxHeight:180}}
@@ -1387,7 +1482,9 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
                   <FeaturePill icon={<Ico.Book/>} label={prompts.length>0?`Prompts (${prompts.length})`:'Prompts'} active={promptsOpen} onClick={()=>setPromptsOpen(o=>!o)}/>
                   {toolsOk&&<FeaturePill icon={<Ico.Tool/>} label={toolIds.length>0?`Tools (${toolIds.length})`:'Tools'} active={toolsOpen||toolIds.length>0} onClick={()=>setToolsOpen(o=>!o)}/>}
                   {visionOk&&(
-                    <>
+                    agentMode
+                      ? <span title="The agent can't read images yet — turn Agent Mode off to send them" style={{display:'inline-flex',alignItems:'center',gap:5,padding:'5px 10px',borderRadius:0,fontSize:12,fontWeight:500,fontFamily:'Newsreader,Georgia,serif',border:'1px dashed var(--bd-2)',color:'var(--fg-4)',cursor:'not-allowed',whiteSpace:'nowrap'}}><Ico.Image/> Image</span>
+                      : <>
                       <FeaturePill icon={<Ico.Image/>} label={images.length>0?`Image (${images.length})`:'Image'} active={images.length>0} onClick={()=>imgRef.current?.click()}/>
                       <input ref={imgRef} type="file" accept="image/*" multiple style={{display:'none'}} onChange={e=>{if(e.target.files)addImages(e.target.files);e.currentTarget.value='';}}/>
                     </>

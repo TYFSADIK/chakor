@@ -1,5 +1,55 @@
 # Changelog
 
+## 2.7.1
+
+Hardening and polish across the board: a tighter sandbox, more reliable
+models, a calmer UI, and the app now presents itself properly to search
+engines and home screens.
+
+Security
+- Agent sandbox: the Python runner now gets an isolated environment (scrubbed
+  env vars, isolated cwd/HOME, no inherited credentials) in addition to the
+  existing CPU, memory, and path containment.
+- SSRF protection now resolves DNS and checks the resulting addresses, so a
+  public hostname that resolves to a private or link-local IP is blocked the
+  same as a literal one. Redirect hops stay re-validated.
+- Changing your password invalidates your other sessions immediately.
+- Shared conversations can be unshared: revoking the link really revokes it.
+- Input caps tightened on chat and API endpoints; oversized payloads are
+  rejected before work starts.
+
+Model reliability
+- The default local model is picked hardware-aware: Chakor chooses the best
+  model that actually fits your RAM/VRAM instead of blindly grabbing the
+  largest file.
+- Hugging Face downloads verify integrity with sha256 before a model is
+  marked ready, so a truncated or corrupted file can never half-load.
+- Crash diagnostics say what actually happened (OOM, missing file, bad
+  flags) instead of the generic "model too large" guess.
+- Vision projectors are paired by filename stem, so the right mmproj lands
+  with the right model even in crowded folders.
+- Vision support for gemma-4 and qwen-vl family models.
+
+UI and UX
+- The agent now has a stop button: halt a runaway workspace run mid-step.
+- Message actions (copy, retry, delete) are reachable on mobile, not just
+  on hover.
+- Shared conversation pages render with the same theme and markdown parity
+  as the in-app view.
+- Accessibility pass: labels, focus handling, keyboard-reachable controls.
+- Admin panel overhaul: cleaner user management, clearer stats.
+
+SEO and PWA
+- Full metadata: Open Graph and Twitter cards with a generated social image,
+  JSON-LD SoftwareApplication schema, canonical URLs, sitemap.xml and
+  robots.txt routes, and a proper web app manifest for install-to-homescreen.
+
+Installers and Docker
+- install.sh, setup.sh, install.ps1, and the Docker image now set up the
+  Python environment the Agent Workspace needs (venv with python-docx,
+  python-pptx, matplotlib, pandas, numpy, openpyxl, Pillow), so the agent
+  tools work out of the box.
+
 ## 2.7
 
 Agent Workspace: the assistant can now create real files in a sandboxed

@@ -144,7 +144,9 @@ export async function* runAgent(opts: AgentOptions): AsyncGenerator<string> {
       });
     }
     const content = typeof message.content === 'string' ? message.content : '';
-    if (content) yield content;
+    // A model that answers its final round with empty text would otherwise
+    // leave the user staring at nothing; say so instead of staying silent.
+    yield content || '(The model returned an empty response. Please try again.)';
     return;
   }
 }

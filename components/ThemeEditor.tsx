@@ -2,12 +2,14 @@
 
 import { useState, useEffect } from 'react';
 import { ACCENTS, DEFAULT_ACCENT, applyAccent, saveAccent, loadAccent } from '@/lib/theme';
+import { useFocusTrap } from '@/hooks/useFocusTrap';
 
 const TYPE_FONT = "'Special Elite', 'JetBrains Mono', monospace";
 
 export default function ThemeEditor({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [accent, setAccent] = useState(DEFAULT_ACCENT);
   useEffect(() => { if (open) setAccent(loadAccent() ?? DEFAULT_ACCENT); }, [open]);
+  const trapRef = useFocusTrap<HTMLDivElement>(open, onClose);
   if (!open) return null;
 
   const pick = (hex: string) => { setAccent(hex); applyAccent(hex); saveAccent(hex); };
@@ -16,13 +18,13 @@ export default function ThemeEditor({ open, onClose }: { open: boolean; onClose:
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 80, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
       <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.55)' }} onClick={onClose} />
-      <div className="modal" style={{ position: 'relative', zIndex: 1, width: '100%', maxWidth: 430, background: 'var(--bg-1)', border: '1px solid var(--bd-3)', boxShadow: 'var(--sh-lg)', overflow: 'hidden' }}>
+      <div ref={trapRef} role="dialog" aria-modal="true" aria-label="Appearance" className="modal" style={{ position: 'relative', zIndex: 1, width: '100%', maxWidth: 430, background: 'var(--bg-1)', border: '1px solid var(--bd-3)', boxShadow: 'var(--sh-lg)', overflow: 'hidden' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 18px', borderBottom: '3px double var(--fg)' }}>
           <div>
             <p className="kicker" style={{ margin: '0 0 4px' }}>Press room</p>
             <span className="headline" style={{ fontSize: 17 }}>Appearance</span>
           </div>
-          <button onClick={onClose} className="btn-ghost-sm" style={{ padding: '4px 6px', color: 'var(--fg-3)' }}>
+          <button onClick={onClose} aria-label="Close appearance editor" className="btn-ghost-sm" style={{ padding: '4px 6px', color: 'var(--fg-3)' }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
           </button>
         </div>

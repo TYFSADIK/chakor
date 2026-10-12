@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { randomUUID } from 'node:crypto';
-import { auth } from '@/lib/auth';
+import { requireUser, isAdminSession } from '@/lib/guard';
 import { importConversation, getConversation } from '@/lib/db';
-import { defaultModel } from '@/lib/models';
+import { defaultModel, MASKED_MODEL_ID } from '@/lib/models';
 
 /**
  * Import a conversation from an exported .json file (the same shape the
@@ -10,9 +10,9 @@ import { defaultModel } from '@/lib/models';
  * Creates a fresh conversation owned by the caller.
  */
 export async function POST(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
-  const userId = (session.user as unknown as { id: number }).id;
+  const authd = await requireUser();
+  if (authd instanceof NextResponse) return authd;
+  const { userId } = authd;
 
   const body = await req.json().catch(() => null);
   const rawMessages = Array.isArray(body?.messages) ? body.messages : null;
@@ -28,13 +28,15 @@ export async function POST(req: NextRequest) {
 
   const title = String(body?.title ?? 'Imported conversation').trim().slice(0, 100) || 'Imported conversation';
   const convId = randomUUID();
+  const admin = isAdminSession(authd.session);
   importConversation(
     convId,
     userId,
-    defaultModel().id,
+    admin ? defaultModel().id : MASKED_MODEL_ID,
     title,
     messages.map((m: { role: string; content: string }) => ({ role: m.role as 'user' | 'assistant', content: m.content.slice(0, 100000) })),
   );
 
-  return NextResponse.json(getConversation(convId, userId));
+  const conv = getConversation(convId, userId);
+  return NextResponse.json(conv && !admin ? { ...conv, model: MASKED_MODEL_ID } : conv);
 }

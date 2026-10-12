@@ -16,9 +16,11 @@ const schema = z.object({
 });
 
 export async function POST(req: NextRequest) {
-  // Per-IP throttle on account creation (depends on the reverse proxy setting
-  // x-forwarded-for; falls back to a shared 'local' bucket).
-  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'local';
+  // Per-IP throttle on account creation. x-forwarded-for is client-controlled
+  // unless a reverse proxy sanitizes it, so only honor it when the deployer
+  // opted in with TRUST_PROXY=true; otherwise share one direct bucket.
+  const fwd = req.headers.get('x-forwarded-for');
+  const ip = process.env.TRUST_PROXY === 'true' && fwd ? fwd.split(',')[0].trim() : 'direct';
   if (!rateLimit(`register:${ip}`, 10, 60 * 60 * 1000)) {
     return NextResponse.json({ error: 'too many attempts, try again later' }, { status: 429 });
   }
@@ -56,10 +58,15 @@ export async function POST(req: NextRequest) {
   try {
     createUser(username, hash, email || undefined);
   } catch (e) {
-    // Concurrent registration with the same username: the pre-check above passed
-    // for both requests, and the UNIQUE constraint rejects the loser.
+    // Concurrent registration with the same username or email: the pre-check
+    // above passed for both requests, and the UNIQUE constraint rejects the
+    // loser. Attribute the collision to the right field.
     if (e instanceof Error && e.message.includes('UNIQUE constraint failed')) {
-      return NextResponse.json({ error: 'username already taken' }, { status: 409 });
+      const isEmail = e.message.includes('users.email');
+      return NextResponse.json(
+        { error: isEmail ? 'email already registered' : 'username already taken' },
+        { status: 409 },
+      );
     }
     throw e;
   }

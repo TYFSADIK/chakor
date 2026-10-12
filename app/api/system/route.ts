@@ -33,13 +33,25 @@ export async function GET(req: NextRequest) {
     liveProps(),
   ]);
 
-  // Hardware + engine status are safe for any signed-in user (they drive the
-  // picker's "this engine is down, switch here" hint). File paths and the full
-  // model list stay admin-only, matching /api/models/local.
+  // Hardware + coarse engine status are safe for any signed-in user (they drive
+  // the picker's "this engine is down, switch here" hint), but the engines'
+  // model lists and the llama status line carry real model names — strip those
+  // for non-admins. File paths and the full model list stay admin-only,
+  // matching /api/models/local.
   const base = {
     hardware,
     hardwareSummary: hardwareSummary(hardware),
-    engines,
+    engines: admin
+      ? engines
+      : engines.map((e) => ({
+          id: e.id,
+          label: e.label,
+          running: e.running,
+          modelCount: e.modelCount,
+          models: [] as string[],
+          detail: e.running ? 'Running' : 'Not running',
+          crashed: e.crashed ?? false,
+        })),
     isAdmin: admin,
   };
 

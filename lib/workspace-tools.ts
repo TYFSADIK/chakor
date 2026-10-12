@@ -118,7 +118,25 @@ export interface SandboxResult {
  * (512MB), RLIMIT_CPU (30s) and RLIMIT_NPROC on the child, revalidates the
  * workspace containment, and cleans up the script file itself. We add a hard
  * outer timeout as belt and braces in case the runner wedges.
+ *
+ * The child gets a minimal allowlisted environment, never process.env:
+ * sandboxed code must not be able to read server secrets (OPENAI_API_KEY,
+ * AUTH_SECRET, HF_TOKEN, …) out of its environment.
  */
+function sandboxEnv(allowedRoot: string): NodeJS.ProcessEnv {
+  const env: Record<string, string> = {
+    CHAKOR_WORKSPACE: allowedRoot,
+    CHAKOR_TIMEOUT: String(SANDBOX_TIMEOUT),
+    CHAKOR_MEMORY_MB: String(SANDBOX_MEMORY_MB),
+    PYTHONDONTWRITEBYTECODE: "1",
+  };
+  // Only pass-throughs the sandbox genuinely needs to run python correctly.
+  for (const key of ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "CHAKOR_NPROC_HEADROOM"]) {
+    if (process.env[key]) env[key] = process.env[key] as string;
+  }
+  return env as NodeJS.ProcessEnv;
+}
+
 async function runSandbox(code: string, workspaceDir: string): Promise<SandboxResult> {
   const wsAbs = path.resolve(workspaceDir);
   // The runner re-validates containment against CHAKOR_WORKSPACE. Use the
@@ -139,13 +157,7 @@ async function runSandbox(code: string, workspaceDir: string): Promise<SandboxRe
         {
           timeout: (SANDBOX_TIMEOUT + 10) * 1000,
           maxBuffer: 10 * 1024 * 1024,
-          env: {
-            ...process.env,
-            CHAKOR_WORKSPACE: allowedRoot,
-            CHAKOR_TIMEOUT: String(SANDBOX_TIMEOUT),
-            CHAKOR_MEMORY_MB: String(SANDBOX_MEMORY_MB),
-            PYTHONDONTWRITEBYTECODE: "1",
-          },
+          env: sandboxEnv(allowedRoot),
         },
         (error, stdout, stderr) => resolve({ stdout: stdout ?? "", stderr: stderr ?? "", error })
       );

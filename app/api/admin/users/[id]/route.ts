@@ -22,6 +22,9 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
   const selfId = (session!.user as unknown as { id: number }).id;
   const { id } = await params;
   const targetId = Number(id);
+  if (!Number.isInteger(targetId)) {
+    return NextResponse.json({ error: 'invalid user id' }, { status: 400 });
+  }
 
   if (targetId === selfId) {
     return NextResponse.json({ error: 'cannot delete your own account' }, { status: 400 });
@@ -39,6 +42,9 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const selfId = (session!.user as unknown as { id: number }).id;
   const { id } = await params;
   const targetId = Number(id);
+  if (!Number.isInteger(targetId)) {
+    return NextResponse.json({ error: 'invalid user id' }, { status: 400 });
+  }
   const body = await req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
     return NextResponse.json({ error: 'invalid body' }, { status: 400 });

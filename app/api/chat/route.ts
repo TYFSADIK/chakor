@@ -1,5 +1,6 @@
 import { NextRequest } from 'next/server';
-import { auth } from '@/lib/auth';
+import { requireUser, isAdminSession } from '@/lib/guard';
+import { sseStream } from '@/lib/sse';
 import {
   getConversation,
   createConversation,
@@ -16,7 +17,7 @@ import { runAgent, supportsTools } from '@/lib/agent';
 import { searxSearch, formatSearchContext } from '@/lib/searxng';
 import { runDeepResearch } from '@/lib/research';
 import { bm25Search, formatRagContext } from '@/lib/rag';
-import { getModel, llamaEndpoint, defaultModel } from '@/lib/models';
+import { llamaEndpoint, resolveChatModel, MASKED_MODEL_ID } from '@/lib/models';
 import { buildSystemPrompt, buildResearchPrompt } from '@/lib/system-prompt';
 import { engineForProvider, activateEngine, lastActiveEngine, trackChatStart, trackChatEnd } from '@/lib/backends';
 import { readAppSettings } from '@/lib/app-settings';
@@ -24,13 +25,9 @@ import { logger, errText } from '@/lib/logger';
 import { randomUUID } from 'node:crypto';
 
 export async function POST(req: NextRequest) {
-  const session = await auth();
-  if (!session?.user) {
-    return new Response(JSON.stringify({ error: 'unauthorized' }), {
-      status: 401, headers: { 'Content-Type': 'application/json' },
-    });
-  }
-  const userId = (session.user as unknown as { id: number }).id;
+  const authd = await requireUser();
+  if (authd instanceof Response) return authd;
+  const { session, userId } = authd;
 
   const body = await req.json().catch(() => null);
   if (!body) {
@@ -57,12 +54,30 @@ export async function POST(req: NextRequest) {
     ? Math.min(1_000_000, Math.max(512, Math.round(contextSize)))
     : undefined;
 
+  // Payload caps (same band as the /v1 API): without them one request can pile
+  // unlimited text and image data into the DB and every provider call.
+  const MAX_MESSAGE_CHARS = 20_000;
+  const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+
   // Only keep well-formed image data URLs, and cap the count to keep payloads sane.
   const cleanImages = Array.isArray(images)
     ? images.filter((u) => typeof u === 'string' && u.startsWith('data:image/')).slice(0, 4)
     : [];
+  // Approximate decoded size of a base64 data URL: 3 bytes per 4 chars of payload.
+  const imageTooBig = cleanImages.some((u) => Math.ceil((u.length - u.indexOf(',') - 1) * 0.75) > MAX_IMAGE_BYTES);
+  if (imageTooBig) {
+    return new Response(JSON.stringify({ error: 'image too large (max 5 MB each)' }), {
+      status: 413, headers: { 'Content-Type': 'application/json' },
+    });
+  }
   const text = typeof message === 'string' ? message.trim() : '';
   const toolIds = Array.isArray(tools) ? tools.filter((t): t is string => typeof t === 'string') : [];
+
+  if (text.length > MAX_MESSAGE_CHARS) {
+    return new Response(JSON.stringify({ error: `message too long (max ${MAX_MESSAGE_CHARS} chars)` }), {
+      status: 400, headers: { 'Content-Type': 'application/json' },
+    });
+  }
 
   if (!text && cleanImages.length === 0) {
     return new Response(JSON.stringify({ error: 'message required' }), {
@@ -70,8 +85,11 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  // Resolve model — fall back to default local model
-  const selectedModel = (modelId ? getModel(modelId) : null) ?? defaultModel();
+  // Resolve model. Non-admins are pinned to the server's default model whatever
+  // id they send (they only ever see the synthetic "Chakor" entry), so a
+  // hand-crafted request can't select or probe a specific real model.
+  const admin = isAdminSession(session);
+  const selectedModel = resolveChatModel(modelId, admin);
   const useTools = toolIds.length > 0 && supportsTools(selectedModel);
 
   // One model at a time (unless the user allows multiple): if this message uses a
@@ -97,7 +115,9 @@ export async function POST(req: NextRequest) {
     }
   } else {
     convId = randomUUID();
-    createConversation(convId, userId, selectedModel.id);
+    // Store the masked id for non-admins so their own conversation list never
+    // reveals which real model served the chat.
+    createConversation(convId, userId, admin ? selectedModel.id : MASKED_MODEL_ID);
     isNewConv = true;
   }
 
@@ -144,14 +164,26 @@ export async function POST(req: NextRequest) {
     } catch { /* non-fatal */ }
   }
 
-  const userMsgId = addMessage(convId, 'user', text, cleanImages.length ? cleanImages : undefined);
+  let userMsgId: number;
+  try {
+    userMsgId = addMessage(convId, 'user', text, cleanImages.length ? cleanImages : undefined);
+  } catch (e) {
+    // The conversation was deleted between the ownership check and this insert
+    // (FK constraint fails) — treat it as gone rather than a 500.
+    if (e instanceof Error && e.message.includes('FOREIGN KEY constraint failed')) {
+      return new Response(JSON.stringify({ error: 'conversation not found' }), {
+        status: 404, headers: { 'Content-Type': 'application/json' },
+      });
+    }
+    throw e;
+  }
 
   let systemPrompt = useDeepResearch ? buildResearchPrompt() : buildSystemPrompt();
   // Recall: fold the user's saved memories into the system prompt so the
   // assistant carries context across conversations.
   const mems = memoriesForPrompt(userId);
   if (mems.length) {
-    systemPrompt += `\n\n## What you remember about ${session.user.name ?? 'the user'}\n`
+    systemPrompt += `\n\n## What you remember about ${session.user?.name ?? 'the user'}\n`
       + `Saved facts to use when relevant. Do not mention or list these unless asked.\n`
       + mems.map((m) => `- ${m}`).join('\n');
   }
@@ -180,7 +212,6 @@ export async function POST(req: NextRequest) {
     { role: 'user', content: userMessageContent },
   ];
 
-  const encoder = new TextEncoder();
   let fullResponse = '';
   const finalConvId = convId;
 
@@ -194,74 +225,74 @@ export async function POST(req: NextRequest) {
     trackChatEnd();
   };
 
-  const stream = new ReadableStream({
-    async start(controller) {
-      const send = (obj: Record<string, unknown>) =>
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
+  const stream = sseStream(async (sink) => {
+    sink.send({ userMsgId });
+    if (searchSources.length > 0) sink.send({ sources: searchSources });
+    for (const s of researchSteps) sink.send({ toolEvent: s });
 
-      send({ userMsgId });
-      if (searchSources.length > 0) send({ sources: searchSources });
-      for (const s of researchSteps) send({ toolEvent: s });
+    try {
+      const deltaStream = useTools
+        ? runAgent({
+            model: selectedModel,
+            messages: chatMessages,
+            toolIds,
+            userId,
+            signal: req.signal,
+            onStats: (stats) => sink.send({ stats }),
+            onTool: (e) => sink.send({ toolEvent: e }),
+          })
+        : streamForModel({
+            modelId: selectedModel.id,
+            messages: chatMessages,
+            system: systemPrompt,
+            contextSize: ctxSize,
+            // Research briefings should be factual, not creative.
+            temperature: useDeepResearch ? 0.4 : undefined,
+            signal: req.signal,
+            onStats: (stats) => sink.send({ stats }),
+          });
 
-      try {
-        const deltaStream = useTools
-          ? runAgent({
-              model: selectedModel,
-              messages: chatMessages,
-              toolIds,
-              userId,
-              signal: req.signal,
-              onStats: (stats) => send({ stats }),
-              onTool: (e) => send({ toolEvent: e }),
-            })
-          : streamForModel({
-              modelId: selectedModel.id,
-              messages: chatMessages,
-              system: systemPrompt,
-              contextSize: ctxSize,
-              // Research briefings should be factual, not creative.
-              temperature: useDeepResearch ? 0.4 : undefined,
-              signal: req.signal,
-              onStats: (stats) => send({ stats }),
-            });
-
-        for await (const delta of deltaStream) {
-          fullResponse += delta;
-          // Best-effort backpressure: if the client reads slower than the model
-          // produces, yield a tick before piling more into the queue.
-          if (controller.desiredSize !== null && controller.desiredSize <= 0) {
-            await new Promise<void>((r) => setImmediate(r));
-          }
-          send({ delta });
+      for await (const delta of deltaStream) {
+        fullResponse += delta;
+        // Best-effort backpressure: if the client reads slower than the model
+        // produces, yield a tick before piling more into the queue.
+        if (sink.desiredSize !== null && sink.desiredSize <= 0) {
+          await new Promise<void>((r) => setImmediate(r));
         }
-      } catch (err: unknown) {
-        const isAbort = err instanceof Error && (err.name === 'AbortError' || err.message.includes('aborted'));
-        if (!isAbort) {
-          // The real error can contain internals — log it server-side, send a
-          // generic message to the browser.
-          logger.error('chat stream failed', { model: selectedModel.id, provider: selectedModel.provider, err: errText(err) });
-          send({ error: 'The model failed to respond. Please try again or switch models.' });
-        }
-      } finally {
-        endTracking();
-        if (fullResponse) {
-          const assistantMsgId = addMessage(finalConvId, 'assistant', fullResponse);
-          send({ assistantMsgId });
-          if (isFirstMessage) {
-            generateTitle(llamaEndpoint(), text || 'Image')
-              .then((title) => updateConversationTitle(finalConvId, userId, title))
-              .catch(() => {});
-          }
-        }
-        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-        controller.close();
+        if (!sink.send({ delta })) break; // client disconnected mid-stream
       }
-    },
-    cancel() {
-      // Client disconnected before consuming everything — release the slot.
+    } catch (err: unknown) {
+      const isAbort = err instanceof Error && (err.name === 'AbortError' || err.message.includes('aborted'));
+      if (!isAbort) {
+        // The real error can contain internals — log it server-side, send a
+        // generic message to the browser.
+        logger.error('chat stream failed', { model: selectedModel.id, provider: selectedModel.provider, err: errText(err) });
+        sink.send({ error: 'The model failed to respond. Please try again or switch models.' });
+      }
+    } finally {
       endTracking();
-    },
-  });
+      if (fullResponse) {
+        try {
+          // Persist the sources alongside the reply so reloads and shared
+          // conversations can render the same source cards that were streamed.
+          const assistantMsgId = addMessage(
+            finalConvId, 'assistant', fullResponse, undefined,
+            searchSources.length ? searchSources : undefined,
+          );
+          sink.send({ assistantMsgId });
+        } catch (e) {
+          // Conversation deleted mid-stream: the reply still reached the user,
+          // there is just nothing left to save it to.
+          if (!(e instanceof Error && e.message.includes('FOREIGN KEY constraint failed'))) throw e;
+        }
+        if (isFirstMessage) {
+          generateTitle(llamaEndpoint(), text || 'Image')
+            .then((title) => updateConversationTitle(finalConvId, userId, title))
+            .catch(() => {});
+        }
+      }
+    }
+  }, endTracking);
 
   return new Response(stream, {
     headers: {

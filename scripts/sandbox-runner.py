@@ -90,15 +90,28 @@ def main():
     with open(script_path, "w") as f:
         f.write(code)
 
-    env = os.environ.copy()
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    env["PYTHONPATH"] = ""
-    env["HOME"] = workspace
-    # Keep native math libraries single-threaded: thread pools inside the
-    # sandbox fight the process limit and slow small jobs down.
-    for var in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS",
-                "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
-        env[var] = "1"
+    # Minimal allowlisted environment for the sandboxed child. Never copy
+    # os.environ here: the server process holds secrets (OPENAI_API_KEY,
+    # AUTH_SECRET, HF_TOKEN, ...) that sandboxed code must not be able to read.
+    # Network egress could additionally be restricted at this boundary later
+    # (e.g. by launching the child inside a network namespace).
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin"),
+        "HOME": workspace,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": "",
+        "CHAKOR_WORKSPACE": allowed_root,
+        # Keep native math libraries single-threaded: thread pools inside the
+        # sandbox fight the process limit and slow small jobs down.
+        "OPENBLAS_NUM_THREADS": "1",
+        "OMP_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "NUMEXPR_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1",
+    }
+    for var in ("LANG", "LC_ALL", "LC_CTYPE", "TZ"):
+        if os.environ.get(var):
+            env[var] = os.environ[var]
 
     global _nproc_limit
     _nproc_limit = _thread_count() + NPROC_HEADROOM

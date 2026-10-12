@@ -39,10 +39,6 @@ yarn-error.log*
 
 # Local agent / scratch files
 /.claude
-*.nmap
-*.gnmap
-*.xml.scan
-/full_lab_report.*
 
 # Build cache
 *.tsbuildinfo

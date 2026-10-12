@@ -2,6 +2,7 @@
 // on-brand. Renders crisp 2x PNGs (and an animated GIF) with the app's own
 // sharp. Run: node docs/build-assets.mjs
 import sharp from 'sharp';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
@@ -111,10 +112,13 @@ const navIcon = {
 };
 
 // ==========================================================================
-// 2) CHAT PREVIEW  (the "look" image)
+// 2) CHAT PREVIEW  (the "look" image) — deep research + agent workspace
 // ==========================================================================
 function preview() {
-  const W = 1180, H = 742, SB = 264;
+  const W = 1440, H = 742, SB = 264, WP = 300;
+  const CW = W - SB - WP;              // chat column
+  const MX = SB + 36;                  // main content left edge
+  const MW = W - WP - MX - 28;         // main content width
   const conv = (y, title, active) => `<g transform="translate(14,${y})">
     <rect width="${SB - 28}" height="38" rx="9" fill="${active ? C.card2 : 'transparent'}"/>
     ${active ? `<circle cx="${SB - 50}" cy="19" r="4" fill="${C.green}"/>` : ''}
@@ -133,53 +137,94 @@ function preview() {
       <circle cx="22" cy="19" r="5.5" fill="none" stroke="${C.fg4}" stroke-width="1.6"/><path d="M26 23l3 3" stroke="${C.fg4}" stroke-width="1.6" stroke-linecap="round"/>
       <text x="38" y="24" font-family="${SANS}" font-size="13.5" fill="${C.fg4}">Search chats</text></g>
     <text x="20" y="196" font-family="${MONO}" font-size="11" fill="${C.fg4}" letter-spacing="1.5">CONVERSATIONS</text>
-    ${conv(208, 'Self-hosting setup', true)}${conv(250, 'Refactor the auth flow', false)}
+    ${conv(208, 'Scheduler deep dive', true)}${conv(250, 'Refactor the auth flow', false)}
     <g transform="translate(14,296)"><path d="M16 8h6l2 3h10v12H16z" fill="none" stroke="${C.fg3}" stroke-width="1.6" stroke-linejoin="round"/><text x="46" y="26" font-family="${SANS}" font-size="14" fill="${C.fg2}">Work</text><path d="M${SB-44} 16l5 5 5-5" fill="none" stroke="${C.fg4}" stroke-width="1.6" stroke-linecap="round"/></g>
     ${conv(338, 'Weekend trip plan', false)}
     <line x1="20" y1="392" x2="${SB - 20}" y2="392" stroke="${C.line}"/>
-    ${nav(408, 'compare', 'Compare', true)}${nav(452, 'notes', 'Notes', false)}${nav(496, 'memory', 'Memory', false)}${nav(540, 'settings', 'Settings', false)}
+    ${nav(408, 'compare', 'Compare', false)}${nav(452, 'notes', 'Notes', false)}${nav(496, 'memory', 'Memory', false)}${nav(540, 'settings', 'Settings', false)}
     <g transform="translate(14,${H - 56})"><circle cx="19" cy="19" r="16" fill="url(#green)"/><text x="19" y="24" font-family="${SANS}" font-size="14" font-weight="bold" fill="#06140b" text-anchor="middle">T</text>
       <text x="46" y="17" font-family="${SANS}" font-size="13.5" fill="${C.fg}">tyfsadik</text>
       <g transform="translate(46,24)"><rect width="46" height="17" rx="8.5" fill="${C.greenDim}"/><text x="23" y="12.5" font-family="${MONO}" font-size="10.5" fill="${C.greenTx}" text-anchor="middle">admin</text></g></g>
   </g>`;
 
-  const M = SB + 36;
-  const codeLine = (y, segs) => `<g transform="translate(${M + 30},${y})">${segs.map(([x, w, c]) => `<rect x="${x}" y="0" width="${w}" height="9" rx="4.5" fill="${c}"/>`).join('')}</g>`;
   const top = `<g>
-    <g transform="translate(${M},22)"><rect width="150" height="36" rx="10" fill="${C.card2}" stroke="${C.line2}"/><circle cx="18" cy="18" r="4.5" fill="${C.green}"/><text x="30" y="23" font-family="${SANS}" font-size="14" fill="${C.fg}">Qwen3-4B</text><path d="M132 16l5 5 5-5" fill="none" stroke="${C.fg3}" stroke-width="1.6" stroke-linecap="round"/></g>
-    <g transform="translate(${M + 162},22)"><rect width="92" height="36" rx="10" fill="${C.bg2}" stroke="${C.line}"/><path d="M16 14h12M16 19h8" stroke="${C.fg3}" stroke-width="1.7" stroke-linecap="round"/><text x="38" y="23" font-family="${MONO}" font-size="13" fill="${C.greenTx}">32K</text></g>
-    <g transform="translate(${W - 264},22)"><rect width="148" height="36" rx="18" fill="${C.greenDim}" stroke="${C.green}" stroke-opacity="0.4"/><text x="18" y="23" font-family="${SANS}" font-size="13.5" fill="${C.greenTx}">Web search</text><rect x="112" y="9" width="28" height="18" rx="9" fill="url(#green)"/><circle cx="131" cy="18" r="6.5" fill="#06140b"/></g>
-    <circle cx="${W - 96}" cy="40" r="5" fill="${C.green}"/>
-    <line x1="${SB}" y1="80" x2="${W}" y2="80" stroke="${C.line}"/></g>`;
+    <g transform="translate(${MX},22)"><rect width="150" height="36" rx="10" fill="${C.card2}" stroke="${C.line2}"/><circle cx="18" cy="18" r="4.5" fill="${C.green}"/><text x="30" y="23" font-family="${SANS}" font-size="14" fill="${C.fg}">Qwen3-4B</text><path d="M132 16l5 5 5-5" fill="none" stroke="${C.fg3}" stroke-width="1.6" stroke-linecap="round"/></g>
+    <g transform="translate(${MX + 162},22)"><rect width="92" height="36" rx="10" fill="${C.bg2}" stroke="${C.line}"/><path d="M16 14h12M16 19h8" stroke="${C.fg3}" stroke-width="1.7" stroke-linecap="round"/><text x="38" y="23" font-family="${MONO}" font-size="13" fill="${C.greenTx}">32K</text></g>
+    <g transform="translate(${MX + 266},22)"><rect width="122" height="36" rx="10" fill="${C.bg2}" stroke="${C.line}"/><circle cx="20" cy="18" r="4.5" fill="${C.green}"/><text x="34" y="23" font-family="${SANS}" font-size="13.5" fill="${C.fg2}">llama.cpp</text></g>
+    <g transform="translate(${W - WP - 172},22)"><rect width="148" height="36" rx="18" fill="${C.greenDim}" stroke="${C.green}" stroke-opacity="0.4"/><text x="18" y="23" font-family="${SANS}" font-size="13.5" fill="${C.greenTx}">Deep research</text><rect x="112" y="9" width="28" height="18" rx="9" fill="url(#green)"/><circle cx="131" cy="18" r="6.5" fill="#06140b"/></g>
+    <line x1="${SB}" y1="80" x2="${W - WP}" y2="80" stroke="${C.line}"/></g>`;
 
-  const chat = `<g>
-    <g transform="translate(${M},116)">${FIST(0, 2, 0.5)}
-      <text x="34" y="6" font-family="${SANS}" font-size="14.5" fill="${C.fg}">Linux 6.12 ships the EEVDF scheduler as default, replacing CFS. It</text>
-      <text x="34" y="30" font-family="${SANS}" font-size="14.5" fill="${C.fg}">picks the task with the earliest virtual deadline, so latency-sensitive</text>
-      <text x="34" y="54" font-family="${SANS}" font-size="14.5" fill="${C.fg}">work gets served first without the old nice-value heuristics:</text>
-      <g transform="translate(34,72)"><rect width="118" height="30" rx="15" fill="${C.card}" stroke="${C.line}"/><circle cx="18" cy="15" r="5" fill="none" stroke="${C.greenTx}" stroke-width="1.5"/><path d="M21 18l3 3" stroke="${C.greenTx}" stroke-width="1.5" stroke-linecap="round"/><text x="30" y="20" font-family="${SANS}" font-size="12.5" fill="${C.greenTx}">4 sources</text></g>
-    </g>
-    <g transform="translate(${W - 470},372)"><rect width="446" height="64" rx="14" fill="url(#green)"/>
-      <text x="24" y="28" font-family="${SANS}" font-size="14.5" fill="#06140b">What changed in the Linux 6.12 scheduler,</text>
-      <text x="24" y="48" font-family="${SANS}" font-size="14.5" fill="#06140b">and why does it matter for desktops?</text></g>
-    <g transform="translate(${M},462)">${FIST(0, 2, 0.5)}
-      <text x="34" y="6" font-family="${SANS}" font-size="14.5" fill="${C.fg}">For an interactive desktop it means snappier UI under load: a video</text>
-      <text x="34" y="30" font-family="${SANS}" font-size="14.5" fill="${C.fg}">call or a compile no longer starves your cursor. EEVDF gives each</text>
-      <text x="34" y="54" font-family="${SANS}" font-size="14.5" fill="${C.fg}">runnable task a fair share, bounded by an explicit deadline.<tspan fill="${C.green}">&#9610;</tspan></text>
-      <g transform="translate(34,74)"><text font-family="${MONO}" font-size="12" fill="${C.fg4}">142 tokens · 1.4s · <tspan fill="${C.green}">98.6 t/s</tspan></text></g></g></g>`;
+  const userBubble = `<g transform="translate(${SB + CW - 24 - 470},104)"><rect width="470" height="64" rx="14" fill="url(#green)"/>
+    <text x="24" y="28" font-family="${SANS}" font-size="14.5" fill="#06140b">Deep research the Linux 6.12 scheduler changes,</text>
+    <text x="24" y="48" font-family="${SANS}" font-size="14.5" fill="#06140b">then turn the findings into a slide deck.</text></g>`;
 
-  const codeBlock = `<g transform="translate(${M + 34},226)"><rect width="470" height="120" rx="12" fill="#0b0b0d" stroke="${C.line}"/>
-    <g transform="translate(20,22)">
-      ${[[[0,46,'#c084fc'],[54,84,'#7dd3fc']],[[0,30,'#94a3b8'],[38,120,'#fbbf24']],[[16,150,'#86efac']],[[16,90,'#94a3b8'],[114,40,'#7dd3fc']],[[0,64,'#c084fc']]].map((segs,i)=>`<g transform="translate(0,${i*20})">${segs.map(([x,w,c])=>`<rect x="${x}" width="${w}" height="9" rx="4.5" fill="${c}" opacity="0.9"/>`).join('')}</g>`).join('')}
-    </g></g>`;
+  const researchChips = `<g transform="translate(${MX},196)">
+    ${chip(0, 0, 'plan · 4 angles')}
+    ${chip(164, 0, 'search · 12 results')}
+    ${chip(362, 0, 'read · 6 pages')}
+    ${chip(518, 0, 'cited briefing', { dot: null })}</g>`;
 
-  const input = `<g transform="translate(${M},${H - 64})"><rect width="${W - M - 24}" height="46" rx="23" fill="${C.bg2}" stroke="${C.line2}"/>
+  const answer = `<g transform="translate(${MX},252)">${FIST(0, 2, 0.5)}
+    <text x="34" y="6" font-family="${SANS}" font-size="14.5" fill="${C.fg}">Linux 6.12 makes EEVDF the default CPU scheduler, replacing CFS. Each task</text>
+    <text x="34" y="30" font-family="${SANS}" font-size="14.5" fill="${C.fg}">carries a virtual deadline and the earliest one runs first, so latency-critical</text>
+    <text x="34" y="54" font-family="${SANS}" font-size="14.5" fill="${C.fg}">work stays smooth under load instead of relying on nice-value heuristics.</text></g>`;
+
+  const source = (x, n, domain, t1, t2) => `<g transform="translate(${x},330)"><rect width="188" height="70" rx="10" fill="${C.card}" stroke="${C.line}"/>
+    <circle cx="20" cy="20" r="10" fill="${C.greenDim}" stroke="#225c38"/><text x="20" y="24.5" font-family="${MONO}" font-size="11" font-weight="bold" fill="${C.greenTx}" text-anchor="middle">${n}</text>
+    <text x="38" y="24" font-family="${MONO}" font-size="11.5" fill="${C.greenTx}">${esc(domain)}</text>
+    <text x="14" y="44" font-family="${SANS}" font-size="11.5" fill="${C.fg2}">${esc(t1)}</text>
+    <text x="14" y="60" font-family="${SANS}" font-size="11.5" fill="${C.fg3}">${esc(t2)}</text></g>`;
+
+  const sources = `<g transform="translate(${MX + 34},0)">
+    ${source(0, 1, 'kernel.org', 'EEVDF scheduler merged', 'as default in 6.12')}
+    ${source(202, 2, 'lwn.net', 'Deadline-based picking,', 'explained')}
+    ${source(404, 3, 'phoronix.com', 'Benchmarks: latency', 'under load')}
+    ${source(606, 4, 'arxiv.org', 'Fairness bounds of', 'earliest-deadline-first')}</g>`;
+
+  const handoff = `<g transform="translate(${MX},432)">${FIST(0, 2, 0.5)}
+    <text x="34" y="6" font-family="${SANS}" font-size="14.5" fill="${C.fg}">The deck is building in the workspace on the right — 8 slides with the</text>
+    <text x="34" y="30" font-family="${SANS}" font-size="14.5" fill="${C.fg}">wakeup-latency chart from the Phoronix numbers baked in.<tspan fill="${C.green}">&#9610;</tspan></text>
+    <g transform="translate(34,52)"><text font-family="${MONO}" font-size="12" fill="${C.fg4}">24 sources · 4 angles · <tspan fill="${C.green}">98.6 t/s</tspan></text></g></g>`;
+
+  const step = (y, text, done) => `<g transform="translate(24,${y})">
+    ${done
+      ? `<circle cx="10" cy="10" r="8" fill="${C.greenDim}" stroke="#225c38"/><path d="M6 10l3 3 5-6" fill="none" stroke="${C.greenTx}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`
+      : `<circle cx="10" cy="10" r="8" fill="none" stroke="${C.green}" stroke-width="1.6"/><circle cx="10" cy="10" r="3" fill="${C.green}"/>`}
+    <text x="28" y="14.5" font-family="${SANS}" font-size="13" fill="${done ? C.fg2 : C.fg}">${esc(text)}</text></g>`;
+
+  const file = (y, name, size) => `<g transform="translate(24,${y})">
+    <rect width="${WP - 48}" height="44" rx="9" fill="${C.card2}" stroke="${C.line}"/>
+    <rect x="12" y="11" width="20" height="24" rx="4" fill="none" stroke="${C.greenTx}" stroke-width="1.5"/><path d="M12 16h20" stroke="${C.greenTx}" stroke-width="1.5"/>
+    <text x="42" y="21" font-family="${SANS}" font-size="13" fill="${C.fg}">${esc(name)}</text>
+    <text x="42" y="36" font-family="${MONO}" font-size="10.5" fill="${C.fg4}">${esc(size)}</text>
+    <path d="M${WP - 48 - 24} 17v10m-4-4 4 4 4-4" fill="none" stroke="${C.fg3}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></g>`;
+
+  const workspace = `<g transform="translate(${W - WP},0)">
+    <rect width="${WP}" height="${H}" fill="${C.bg0}"/><line x1="0" y1="0" x2="0" y2="${H}" stroke="${C.line}"/>
+    <text x="24" y="40" font-family="${SANS}" font-size="16" font-weight="bold" fill="${C.fg}">Agent Workspace</text>
+    <circle cx="${WP - 96}" cy="34" r="4" fill="${C.green}"/><text x="${WP - 86}" y="39" font-family="${MONO}" font-size="11.5" fill="${C.greenTx}">working</text>
+    <g transform="translate(24,58)"><rect width="128" height="30" rx="15" fill="${C.greenDim}" stroke="${C.green}" stroke-opacity="0.4"/><text x="14" y="20" font-family="${SANS}" font-size="12.5" fill="${C.greenTx}">Agent mode</text><rect x="92" y="6" width="28" height="18" rx="9" fill="url(#green)"/><circle cx="111" cy="15" r="6.5" fill="#06140b"/></g>
+    <text x="24" y="126" font-family="${MONO}" font-size="11" fill="${C.fg4}" letter-spacing="1.5">ACTIVITY</text>
+    ${step(144, 'Planned 8-slide outline', true)}
+    ${step(180, 'Searched 12 sources', true)}
+    ${step(216, 'Read 6 pages in full', true)}
+    ${step(252, 'Wrote notes.md', true)}
+    ${step(288, 'Rendering slides.pptx', false)}
+    <line x1="24" y1="336" x2="${WP - 24}" y2="336" stroke="${C.line}"/>
+    <text x="24" y="370" font-family="${MONO}" font-size="11" fill="${C.fg4}" letter-spacing="1.5">FILES</text>
+    ${file(388, 'slides.pptx', '88 KB · just now')}
+    ${file(442, 'latency-chart.png', '210 KB')}
+    ${file(496, 'notes.md', '4 KB')}
+    <text x="24" y="${H - 28}" font-family="${MONO}" font-size="10.5" fill="${C.fg4}">sandboxed python · files stay on your disk</text>
+  </g>`;
+
+  const input = `<g transform="translate(${MX},${H - 64})"><rect width="${MW}" height="46" rx="23" fill="${C.bg2}" stroke="${C.line2}"/>
     <path d="M28 23c-4 0-7-3-7-7s3-7 7-7 7 3 7 7" fill="none" stroke="${C.fg4}" stroke-width="1.6" stroke-linecap="round"/>
-    <text x="48" y="28" font-family="${SANS}" font-size="14" fill="${C.fg4}">Message Chakor. Runs on your machine.</text>
-    <circle cx="${W - M - 24 - 26}" cy="23" r="16" fill="url(#green)"/><path d="M${W - M - 24 - 33} 23h14m-5-5 5 5-5 5" stroke="#06140b" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></g>`;
+    <text x="48" y="28" font-family="${SANS}" font-size="14" fill="${C.fg4}">Tell the agent what to create...</text>
+    <circle cx="${MW - 26}" cy="23" r="16" fill="url(#green)"/><path d="M${MW - 33} 23h14m-5-5 5 5-5 5" stroke="#06140b" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></g>`;
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${DEFS}
-    <rect width="${W}" height="${H}" fill="${C.bg2}"/>${sidebar}${top}${chat}${codeBlock}${input}</svg>`;
+    <rect width="${W}" height="${H}" fill="${C.bg2}"/>${sidebar}${top}${userBubble}${researchChips}${answer}${sources}${handoff}${workspace}${input}</svg>`;
 }
 
 // ==========================================================================
@@ -288,8 +333,55 @@ function download() {
   </svg>`;
 }
 
+// ==========================================================================
+// 5) OG SOCIAL CARD  (1200x630, also copied to public/ for the app metadata)
+// ==========================================================================
+function og() {
+  const W = 1200, H = 630;
+  const win = `<g transform="translate(742,120) scale(1.02)" filter="url(#sh)">
+    <rect width="430" height="310" rx="16" fill="${C.card}" stroke="${C.line}"/>
+    <rect width="430" height="310" rx="16" fill="none" stroke="${C.green}" stroke-opacity="0.18"/>
+    <circle cx="22" cy="24" r="5" fill="#f87171"/><circle cx="40" cy="24" r="5" fill="#fbbf24"/><circle cx="58" cy="24" r="5" fill="#34d36b"/>
+    <g transform="translate(300,13)"><rect width="116" height="24" rx="12" fill="${C.card2}" stroke="${C.line2}"/><circle cx="15" cy="12" r="4" fill="${C.green}"/><text x="26" y="16.5" font-family="${MONO}" font-size="12" fill="${C.fg2}">Qwen3-4B</text></g>
+    <line x1="0" y1="52" x2="430" y2="52" stroke="${C.line}"/>
+    <g transform="translate(22,72)">${FIST(0, 0, 0.5)}
+      <rect x="34" y="2" width="300" height="9" rx="4.5" fill="#2a2a30"/><rect x="34" y="19" width="340" height="9" rx="4.5" fill="#222228"/><rect x="34" y="36" width="250" height="9" rx="4.5" fill="#222228"/>
+      <g transform="translate(34,54)">${fitBadge(0, 0, 'FITS')}</g>
+    </g>
+    <g transform="translate(150,168)"><rect width="258" height="58" rx="14" fill="url(#green)"/>
+      <rect x="20" y="18" width="210" height="8" rx="4" fill="#dffbe8"/><rect x="20" y="34" width="150" height="8" rx="4" fill="#bff0cf"/></g>
+    <g transform="translate(22,258)"><rect width="386" height="34" rx="17" fill="${C.bg2}" stroke="${C.line2}"/><rect x="16" y="15" width="200" height="6" rx="3" fill="#2a2a30"/>
+      <circle cx="368" cy="17" r="13" fill="url(#green)"/><path d="M362 17h10m-4-4 4 4-4 4" stroke="#06140b" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></g>
+  </g>`;
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">${DEFS}
+    <rect width="${W}" height="${H}" fill="url(#bg)"/><rect width="${W}" height="${H}" fill="url(#glow)"/>
+    <rect x="0" y="${H - 4}" width="${W}" height="4" fill="${C.green}" opacity="0.6"/>
+    ${win}
+    <g transform="translate(64,84)">
+      ${FIST(0, 0, 0.9)}
+      <text x="52" y="18" font-family="${MONO}" font-size="14" fill="${C.greenTx}" letter-spacing="3">SELF-HOSTED AI WORKSPACE</text>
+      <text x="-4" y="148" font-family="${SANS}" font-size="104" font-weight="bold" fill="${C.fg}" letter-spacing="-3">Chakor</text>
+      <text x="0" y="212" font-family="${SANS}" font-size="29" font-weight="bold" fill="${C.fg}">Your AI. Your hardware. <tspan fill="${C.greenHi}">Nobody else&#39;s business.</tspan></text>
+      <text x="0" y="256" font-family="${SANS}" font-size="19" fill="${C.fg2}">Local models, deep research, and a sandboxed agent workspace.</text>
+      ${chip(0, 292, 'llama.cpp · Ollama · LM Studio')}
+      ${chip(0, 334, 'Deep research', { dot: C.green })}
+      ${chip(160, 334, 'Agent workspace', { dot: C.green })}
+      ${chip(0, 376, 'No cloud', { dot: null, fg: C.fg3, bg: C.card, bd: C.line })}
+      ${chip(112, 376, 'No tracking', { dot: null, fg: C.fg3, bg: C.card, bd: C.line })}
+      ${chip(244, 376, 'No big tech', { dot: null, fg: C.fg3, bg: C.card, bd: C.line })}
+    </g>
+    <text x="64" y="${H - 32}" font-family="${MONO}" font-size="15" fill="${C.fg3}">github.com/TYFSADIK/chakor</text>
+  </svg>`;
+}
+
 await render('banner', banner());
 await render('preview', preview());
 await render('fit', fit());
 await render('download', download());
+await render('og', og());
+
+// The OG card doubles as the app's social image (referenced from app/layout.tsx).
+fs.copyFileSync(path.join(DIR, 'og.png'), path.join(DIR, '..', 'public', 'og.png'));
+console.log('copied og.png -> public/og.png');
 console.log('done');
