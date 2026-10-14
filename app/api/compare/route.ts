@@ -3,6 +3,7 @@ import { auth } from '@/lib/auth';
 import { streamForModel } from '@/lib/dispatch';
 import { resolveChatModel } from '@/lib/models';
 import { isAdminSession } from '@/lib/guard';
+import { getSetting } from '@/lib/db';
 import { buildSystemPrompt } from '@/lib/system-prompt';
 import { sseStream } from '@/lib/sse';
 import { logger, errText } from '@/lib/logger';
@@ -33,7 +34,7 @@ export async function POST(req: NextRequest) {
 
   // Non-admins are pinned to the server's default model whatever id they send.
   const model = resolveChatModel(modelId, isAdminSession(session));
-  const system = buildSystemPrompt();
+  const system = buildSystemPrompt({ customInstructions: getSetting('custom_instructions') ?? undefined });
   const messages: ChatMessage[] = [
     { role: 'system', content: system },
     { role: 'user', content: prompt },

@@ -154,6 +154,23 @@ export function db(): Database.Database {
     );
 
     CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id, pinned DESC, updated_at DESC);
+
+    -- Server-wide key/value settings editable from the admin panel
+    -- (custom_instructions, ...). Not per-user.
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key    TEXT PRIMARY KEY,
+      value  TEXT NOT NULL
+    );
+
+    -- Image generation ledger: one row per generated (or attempted) image,
+    -- backing the per-user daily rate limit.
+    CREATE TABLE IF NOT EXISTS image_generations (
+      id          INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at  INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_imggen_user ON image_generations(user_id, created_at);
   `);
 
   // Idempotent migrations — ALTER TABLE fails with 'duplicate column name' if
@@ -732,6 +749,44 @@ export function updateMemory(id: string, userId: number, fields: Partial<{ conte
 
 export function deleteMemory(id: string, userId: number): void {
   db().prepare('DELETE FROM memories WHERE id = ? AND user_id = ?').run(id, userId);
+}
+
+/** True when the conversation has a live share link (its workspace files may
+ *  then be read anonymously, e.g. images embedded on the share page). */
+export function isConversationShared(id: string): boolean {
+  const row = db().prepare('SELECT share_slug FROM conversations WHERE id = ?').get(id) as { share_slug: string | null } | undefined;
+  return !!row?.share_slug;
+}
+
+// ─── Image generation (per-user daily ledger) ────────────────────
+// Default 10/day for regular users (each render monopolizes the GPU);
+// IMAGE_DAILY_LIMIT overrides; admins are never limited (see image-gen.ts).
+export const IMAGE_GEN_DAILY_LIMIT = (() => {
+  const n = Number(process.env.IMAGE_DAILY_LIMIT);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 10;
+})();
+
+/** How many images this user has generated since local midnight. */
+export function imageGenerationsToday(userId: number): number {
+  return (db()
+    .prepare(`SELECT COUNT(*) AS c FROM image_generations WHERE user_id = ? AND created_at >= strftime('%s', 'now', 'localtime', 'start of day')`)
+    .get(userId) as { c: number }).c;
+}
+
+/** Record one image generation against the user's daily allowance. */
+export function recordImageGeneration(userId: number): void {
+  db().prepare('INSERT INTO image_generations (user_id) VALUES (?)').run(userId);
+}
+
+// ─── App settings (server-wide, admin-editable) ────────────────────
+export function getSetting(key: string): string | null {
+  const row = db().prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as { value: string } | undefined;
+  return row?.value ?? null;
+}
+
+export function setSetting(key: string, value: string): void {
+  db().prepare('INSERT INTO app_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+    .run(key, value);
 }
 
 /** A capped, pinned-first slice of memories for injecting into the system prompt. */

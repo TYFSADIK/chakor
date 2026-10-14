@@ -111,6 +111,16 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
   const [toast, setToast] = useState<{msg:string;ok:boolean}|null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>|null>(null);
   const [acting, setActing] = useState(false); // guards destructive modal actions
+  const [instr, setInstr] = useState('');
+  const [instrLoaded, setInstrLoaded] = useState(false);
+  const [savingInstr, setSavingInstr] = useState(false);
+  // Image generation settings card (stable-diffusion.cpp backend).
+  type ImgModel = { name: string; sizeBytes: number; active: boolean };
+  type ImgSettings = { enabled: boolean; allowlist: number[]; engine: string; online: boolean;
+    mode: 'swap' | 'parallel'; modelsDir: string; activeModel: string | null; models: ImgModel[] };
+  const [img, setImg] = useState<ImgSettings | null>(null);
+  const [imgUsers, setImgUsers] = useState<User[]>([]);
+  const [savingImg, setSavingImg] = useState(false);
   const resetTrapRef = useFocusTrap<HTMLDivElement>(!!resetModal, () => setResetModal(null));
   const confirmTrapRef = useFocusTrap<HTMLDivElement>(!!confirm, () => { if (!acting) setConfirm(null); });
 
@@ -124,8 +134,49 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
   const loadStats = useCallback(async()=>{ setLoading(true); setError(''); try{const r=await fetch('/api/admin/stats');if(!r.ok)throw new Error(await r.text());setStats(await r.json());setLastRefresh(new Date());}catch(e){setError(String(e));}finally{setLoading(false);}}, []);
   const loadUsers = useCallback(async()=>{ setLoading(true); setError(''); try{const r=await fetch('/api/admin/users');if(!r.ok)throw new Error(await r.text());setUsers(await r.json());setLastRefresh(new Date());}catch(e){setError(String(e));}finally{setLoading(false);}}, []);
   const loadSystem = useCallback(async()=>{ try{const r=await fetch('/api/admin/system');if(r.ok)setSystem(await r.json());}catch{} }, []);
+  const loadSettings = useCallback(async()=>{ try{const r=await fetch('/api/admin/settings');if(r.ok){const d=await r.json();setInstr(d.customInstructions??'');} setInstrLoaded(true);}catch{setInstrLoaded(true);} }, []);
+  const loadImg = useCallback(async()=>{ try{const r=await fetch('/api/admin/images');if(r.ok)setImg(await r.json());}catch{} },[]);
+  // The allowlist picker needs the user list even on the dashboard tab.
+  const loadImgUsers = useCallback(async()=>{ try{const r=await fetch('/api/admin/users');if(r.ok)setImgUsers(await r.json());}catch{} },[]);
 
-  useEffect(()=>{ if(tab==='dashboard'){loadStats();loadSystem();}else loadUsers(); },[tab,loadStats,loadUsers,loadSystem]);
+  async function saveImg(patch: { enabled?: boolean; allowlist?: number[] }) {
+    if(savingImg)return;
+    setSavingImg(true);
+    try{
+      const r=await fetch('/api/admin/images',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)});
+      const d=await r.json().catch(()=>null);
+      if(!r.ok){notify(d?.error??'Failed to save image settings',false);return;}
+      setImg(p=>p?{...p,enabled:d.enabled,allowlist:d.allowlist}:p);
+      notify('Image generation settings saved');
+    }catch{notify('Network error, please try again',false);}
+    finally{setSavingImg(false);}
+  }
+
+  async function imgModelAction(method: 'POST' | 'DELETE', name: string) {
+    try{
+      const r=await fetch('/api/admin/imagemodels',{method,headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+      const d=await r.json().catch(()=>null);
+      if(!r.ok){notify(d?.error??'Model action failed',false);return;}
+      const models=(d?.models??[]) as ImgModel[];
+      setImg(p=>p?{...p,models,activeModel:models.find(m=>m.active)?.name??null}:p);
+      notify(method==='POST'?'Active image model updated':'Model deleted');
+    }catch{notify('Network error, please try again',false);}
+  }
+
+  async function saveInstr() {
+    if(savingInstr)return;
+    setSavingInstr(true);
+    try{
+      const r=await fetch('/api/admin/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({customInstructions:instr})});
+      const d=await r.json().catch(()=>null);
+      if(!r.ok){notify(d?.error??'Failed to save instructions',false);return;}
+      setInstr(d.customInstructions??'');
+      notify('Model instructions saved');
+    }catch{notify('Network error, please try again',false);}
+    finally{setSavingInstr(false);}
+  }
+
+  useEffect(()=>{ if(tab==='dashboard'){loadStats();loadSystem();loadSettings();loadImg();loadImgUsers();}else loadUsers(); },[tab,loadStats,loadUsers,loadSystem,loadSettings,loadImg,loadImgUsers]);
   useEffect(()=>{ if(timer.current) clearInterval(timer.current); timer.current=setInterval(()=>{if(tab==='dashboard'){loadStats();loadSystem();}},30000); return()=>{if(timer.current)clearInterval(timer.current);}; },[tab,loadStats,loadSystem]);
   useEffect(()=>{ const mq=window.matchMedia('(max-width: 900px)'); const f=()=>setNarrow(mq.matches); f(); mq.addEventListener('change',f); return()=>mq.removeEventListener('change',f); },[]);
 
@@ -250,6 +301,91 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
             </div>
 
             {stats.dailyStats&&stats.dailyStats.length>0&&<ActivityChart data={stats.dailyStats}/>}
+
+            {/* Model instructions */}
+            <div style={{background:'var(--bg-1)',border:'1px solid var(--bd-2)',borderRadius:0,padding:'18px 20px'}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
+                <div>
+                  <p className="headline" style={{fontSize:15,marginBottom:2}}>Model Instructions</p>
+                  <p className="byline" style={{textTransform:'none'}}>These instructions apply to every chat on this server.</p>
+                </div>
+              </div>
+              <textarea
+                value={instr}
+                onChange={e=>setInstr(e.target.value)}
+                placeholder={instrLoaded?'e.g. Always answer in plain language. Keep answers under 3 paragraphs.':'Loading…'}
+                disabled={!instrLoaded}
+                rows={6}
+                maxLength={4000}
+                className="inp"
+                style={{width:'100%',fontSize:13,padding:'10px 12px',resize:'vertical',lineHeight:1.5,marginBottom:10,boxSizing:'border-box'}}
+              />
+              <div style={{display:'flex',alignItems:'center',gap:12}}>
+                <button onClick={saveInstr} disabled={savingInstr||!instrLoaded} className="btn btn-green" style={{opacity:savingInstr?0.6:1}}>
+                  {savingInstr?'Saving…':'Save'}
+                </button>
+                <span className="byline" style={{textTransform:'none'}}>{instr.length}/4000</span>
+              </div>
+            </div>
+
+            {/* Image generation */}
+            <div style={{background:'var(--bg-1)',border:'1px solid var(--bd-2)',borderRadius:0,padding:'18px 20px'}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
+                <div>
+                  <p className="headline" style={{fontSize:15,marginBottom:2}}>Image Generation</p>
+                  <p className="byline" style={{textTransform:'none'}}>stable-diffusion.cpp engine · {img?img.mode==='swap'?'swap mode — chat pauses while an image renders':'parallel mode — chat stays live':''} · images are saved into each conversation&apos;s workspace.</p>
+                </div>
+                {img&&<span style={{fontSize:10.5,padding:'4px 10px',letterSpacing:'0.1em',textTransform:'uppercase',background:img.online?cm('var(--ok)',10):cm('var(--err)',10),color:img.online?'var(--ok)':'var(--err)',border:`1px solid ${img.online?cm('var(--ok)',30):cm('var(--err)',30)}`,fontFamily:TYPE}}>{img.online?'engine online':'engine offline'}</span>}
+              </div>
+              {!img?<p style={{fontSize:13,color:'var(--fg-3)'}}>Loading…</p>:(
+                <div style={{display:'flex',flexDirection:'column',gap:14}}>
+                  <label style={{display:'flex',alignItems:'center',gap:8,fontSize:13.5,color:'var(--fg)',cursor:'pointer'}}>
+                    <input type="checkbox" checked={img.enabled} disabled={savingImg}
+                      onChange={e=>saveImg({enabled:e.target.checked})}/>
+                    Enable image generation
+                  </label>
+
+                  {img.enabled&&(
+                    <div>
+                      <p className="byline" style={{marginBottom:8}}>Who can generate images (admins always can)</p>
+                      <div style={{display:'flex',flexWrap:'wrap',gap:6}}>
+                        {imgUsers.map(u=>{
+                          const on=u.is_admin===1||img.allowlist.includes(u.id);
+                          return (
+                            <button key={u.id} disabled={savingImg||u.is_admin===1}
+                              onClick={()=>saveImg({allowlist:on?img.allowlist.filter(id=>id!==u.id):[...img.allowlist,u.id]})}
+                              title={u.is_admin===1?'Admins are always allowed':(on?'Revoke access':'Grant access')}
+                              style={{fontSize:12,padding:'4px 10px',borderRadius:0,cursor:u.is_admin===1?'default':'pointer',border:`1px solid ${on?'var(--g-bd)':'var(--bd-2)'}`,background:on?'var(--g-dim)':'transparent',color:on?'var(--g-text)':'var(--fg-3)',fontFamily:'Newsreader,Georgia,serif'}}>
+                              {u.username}{u.is_admin===1?' · admin':''}
+                            </button>
+                          );
+                        })}
+                        {imgUsers.length===0&&<span style={{fontSize:12.5,color:'var(--fg-4)'}}>No users found.</span>}
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <p className="byline" style={{marginBottom:8}}>Models ({img.modelsDir})</p>
+                    {img.models.length>0
+                      ? <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                          {img.models.map(m=>(
+                            <div key={m.name} style={{display:'flex',alignItems:'center',gap:10,fontSize:12.5}}>
+                              <span style={{flex:1,color:'var(--fg-2)',fontFamily:TYPE,fontSize:11.5,wordBreak:'break-all'}}>{m.name} <span style={{color:'var(--fg-4)'}}>({(m.sizeBytes/1e9).toFixed(1)} GB)</span></span>
+                              {m.active
+                                ? <span style={{fontSize:11,color:'var(--ok)',fontFamily:TYPE,textTransform:'uppercase',letterSpacing:'0.08em'}}>active</span>
+                                : <>
+                                    <button onClick={()=>imgModelAction('POST',m.name)} className="btn btn-outline" style={{fontSize:11,padding:'5px 12px'}}>Set active</button>
+                                    <button onClick={()=>imgModelAction('DELETE',m.name)} className="btn btn-outline" style={{fontSize:11,padding:'5px 12px',color:'var(--err)'}}>Delete</button>
+                                  </>}
+                            </div>
+                          ))}
+                        </div>
+                      : <p style={{fontSize:12.5,color:'var(--fg-4)',margin:0}}>No image models installed. Drop a diffusion-model .gguf into that folder, then refresh.</p>}
+                  </div>
+                </div>
+              )}
+            </div>
 
             {stats.topUsers.length>0&&(
               <div style={{background:'var(--bg-1)',border:'1px solid var(--bd-2)',borderRadius:0,overflow:'hidden'}}>

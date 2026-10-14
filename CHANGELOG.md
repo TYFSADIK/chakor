@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+Image generation on your own GPU, powered by stable-diffusion.cpp.
+
+- New Create image pill in the composer (or just write "draw a …" — natural
+  prompts are detected automatically). The picture renders inline in the
+  chat, is saved into the conversation's workspace for download, and shows
+  up on shared conversation pages.
+- Backend is stable-diffusion.cpp's `sd-server` (SDCPP_URL/SDCPP_DIR), which
+  Chakor spawns on demand — no separate service to run. The default model is
+  an Iris-architecture pixel-space DiT GGUF (Sakura-Iris-3B) with a Qwen3-VL
+  text encoder; ComfyUI cannot run this architecture, so Chakor talks to
+  sd-server's job API directly. Requests use the Iris-recommended sampling
+  (dpm++2m, CFG 3, ≤1024², dimensions rounded to multiples of 16).
+- Swap vs. parallel GPU scheduling (IMAGE_ENGINE_MODE=auto|swap|parallel):
+  on cards under 12 GB VRAM the chat model is stopped while an image renders
+  and brought back afterwards; with 12+ GB VRAM (or 32+ GB unified memory)
+  both stay resident. Any GPU can attempt generation — small cards are slow
+  (minutes per image), not disqualified.
+- Admins manage it from a new Image Generation section in the admin panel:
+  enable/disable, per-user allowlist (admins are always allowed, off by
+  default), engine status and mode, and the installed diffusion-model GGUFs
+  with set-active and delete (no download pipeline — drop .gguf files into
+  the models folder).
+- Generation runs in the background with progress in the bubble; the stop
+  button cancels the sd-server job. Error text shown to non-admins never
+  leaks model file names or server paths.
+- Per-user rate limit of 10 images per day, persisted in the database.
+- Workspace file downloads now serve images inline (and to share-link
+  viewers) so generated pictures render instead of downloading.
+
 ## 2.7.1
 
 Hardening and polish across the board: a tighter sandbox, more reliable

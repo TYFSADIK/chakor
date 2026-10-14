@@ -10,6 +10,7 @@ import ThemeEditor from './ThemeEditor';
 import AgentWorkspace, { type AgentWorkspaceHandle } from './AgentWorkspace';
 import { Markdown } from './Markdown';
 import { SourceCards, type Source } from './SourceCards';
+import { detectImageIntent } from '@/lib/image-intent';
 import { APP } from '@/lib/config';
 
 // ─── Types ────────────────────────────────────────────────────
@@ -688,9 +689,17 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [streaming, setStreaming] = useState(false);
   const [abortRef] = useState<{current: AbortController|null}>({current: null});
+  // Conversation id of the in-flight image generation, if that's what's
+  // streaming. Disconnecting (navigating, closing) must NOT cancel a
+  // generation — only the stop button does, via POST /api/images/cancel.
+  const [imgGenJobRef] = useState<{current: string|null}>({current: null});
   const [useSearch, setUseSearch] = useState(false);
   const [useDeep, setUseDeep] = useState(false);
   const [researching, setResearching] = useState(false);
+  // Image generation: server-reported capability (enabled + allowed for this
+  // user) and the composer toggle for "this message is an image prompt".
+  const [imgGen, setImgGen] = useState<{enabled:boolean;allowed:boolean;remaining:number;dailyLimit:number;unlimited?:boolean}|null>(null);
+  const [useImage, setUseImage] = useState(false);
   const [useRag, setUseRag] = useState(true);
   const [input, setInput] = useState('');
   // Lazy-init from the viewport so desktop loads don't flash the sidebar
@@ -784,6 +793,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   useEffect(()=>{ fetch('/api/prompts').then(r=>r.json()).then((p:Prompt[])=>setPrompts(Array.isArray(p)?p:[])).catch(()=>{}); },[]);
   useEffect(()=>{ fetch('/api/folders').then(r=>r.json()).then((f:Folder[])=>setFolders(Array.isArray(f)?f:[])).catch(()=>{}); },[]);
   useEffect(()=>{ fetch('/api/tools').then(r=>r.json()).then((t:ToolInfo[])=>setToolList(Array.isArray(t)?t:[])).catch(()=>{}); },[]);
+  useEffect(()=>{ fetch('/api/images').then(r=>r.ok?r.json():null).then(d=>{if(d)setImgGen(d);}).catch(()=>{}); },[]);
   useEffect(()=>{ refreshLoaded(); refreshLocal();
   },[]);
   // Poll background model downloads so the header chip keeps moving. Admin only
@@ -815,7 +825,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
         if(docsOpen){setDocsOpen(false);return;}
         if(promptsOpen){setPromptsOpen(false);return;}
         if(toolsOpen){setToolsOpen(false);return;}
-        if(streaming){abortRef.current?.abort();return;}
+        if(streaming){stopInFlight();return;}
       }
       if(meta&&e.key==='k'){e.preventDefault();convSearchRef.current?.focus();}
       if(meta&&e.key==='n'){e.preventDefault();startNew();}
@@ -878,6 +888,16 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   // in it from outside (edit, suggestion, saved prompt).
   function focusComposer() {
     requestAnimationFrame(()=>{const el=taRef.current;if(el){el.focus();el.style.height='auto';el.style.height=Math.min(el.scrollHeight,180)+'px';}});
+  }
+
+  // The stop button (and Escape): drop the stream locally, and when what's
+  // streaming is an image generation ALSO tell the server to cancel the job.
+  // Plain navigation only aborts the stream — the image keeps rendering and
+  // appears when it's done.
+  function stopInFlight() {
+    abortRef.current?.abort();
+    const cid = imgGenJobRef.current;
+    if (cid) fetch('/api/images/cancel',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversationId:cid})}).catch(()=>{});
   }
 
   function startNew() { if(window.innerWidth<768)setSidebarOpen(false); abortRef.current?.abort(); streamToken.current++; loadToken.current++; setActiveId(null); setMsgs([]); setTitleVal(''); setEditTitle(false); taRef.current?.focus(); }
@@ -1079,6 +1099,57 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
     }
   }
 
+  // Image generation path: same streaming shell as sendMsg, but POSTs to the
+  // image endpoint and appends the finished picture from its `image` frame
+  // (the caption arrives as a normal delta).
+  async function sendImageGen(text:string, priorOverride?:Msg[]) {
+    if(!text.trim()||streaming) return;
+    atBottom.current=true; setShowJump(false);
+    const isFirst=(priorOverride??msgs).length===0;
+    const userCid=++cidRef.current, assistantCid=++cidRef.current;
+    setMsgs(p=>[...(priorOverride??p),{role:'user',content:text,cid:userCid},{role:'assistant',content:'',streaming:true,cid:assistantCid}]);
+    setStreaming(true);
+    const ctrl=new AbortController(); abortRef.current=ctrl; let acc=''; let resolvedId:string|null=activeId;
+    imgGenJobRef.current=activeId; // updated to the real id once the header lands
+    const myToken=++streamToken.current;
+    const updateMsgs=(fn:(prev:Msg[])=>Msg[])=>setMsgs(prev=>streamToken.current===myToken?fn(prev):prev);
+    let ended=false;
+    let flushTimer:ReturnType<typeof setTimeout>|null=null;
+    const flush=()=>{
+      if(flushTimer){clearTimeout(flushTimer);flushTimer=null;}
+      updateMsgs(prev=>{const u=[...prev];u[u.length-1]={...u[u.length-1],content:acc,streaming:!ended};return u;});
+    };
+    const scheduleFlush=()=>{ if(!flushTimer) flushTimer=setTimeout(flush,80); };
+    try {
+      const r=await fetch('/api/images/generate',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({conversationId:activeId||undefined,message:text}),signal:ctrl.signal});
+      if(!r.ok){ let msg=`Request failed (HTTP ${r.status})`; try{const d=await r.json(); if(typeof d?.error==='string'&&d.error) msg=d.error;}catch{} throw new Error(msg); }
+      const newId=r.headers.get('X-Conversation-Id');
+      if(newId&&!activeId){resolvedId=newId;setActiveId(newId);imgGenJobRef.current=newId;setConvs(p=>[{id:newId,title:'New conversation',model:modelId||'chakor',created_at:Math.floor(Date.now()/1000),updated_at:Math.floor(Date.now()/1000)},...p]);}
+      const reader=r.body!.getReader(); const dec=new TextDecoder(); let buf='';
+      outer:while(true){const{done,value}=await reader.read(); if(done) break; buf+=dec.decode(value,{stream:true}); const parts=buf.split('\n\n'); buf=parts.pop()??'';
+        for(const part of parts){const lines=part.split('\n').filter(l=>l.startsWith('data:')); if(!lines.length) continue; const data=lines.map(l=>l.slice(5)).join('\n').trim(); if(data==='[DONE]') break outer;
+          try{const p=JSON.parse(data) as {delta?:string;userMsgId?:number;assistantMsgId?:number;image?:{name:string;url:string;prompt:string}};
+            if(p.userMsgId) updateMsgs(prev=>{const u=[...prev];const i=u.length-2;if(i>=0&&u[i].role==='user')u[i]={...u[i],dbId:p.userMsgId};return u;});
+            if(p.assistantMsgId) updateMsgs(prev=>{const u=[...prev];u[u.length-1]={...u[u.length-1],dbId:p.assistantMsgId};return u;});
+            if(p.image){acc+=`\n\n![${p.image.prompt.slice(0,80)}](${p.image.url})\n\n`;scheduleFlush();}
+            if(p.delta){acc+=p.delta;scheduleFlush();}
+          }catch{}
+        }
+      }
+    } catch(err) {
+      if(!(err instanceof Error&&err.name==='AbortError')){
+        const msg=err instanceof Error&&err.message?err.message:'Connection error. Please try again.';
+        if(!acc) acc=`*${msg}*`;
+      }
+    } finally {
+      ended=true; flush();
+      abortRef.current=null; setStreaming(false);
+      imgGenJobRef.current=null;
+      setImgGen(g=>g&&!g.unlimited?{...g,remaining:Math.max(0,g.remaining-1)}:g);
+      if(isFirst&&resolvedId) setTimeout(()=>refreshTitle(resolvedId!),1500);
+    }
+  }
+
   // Agent Mode path: the workspace panel owns the agent stream; the final
   // answer lands here as a normal assistant message.
   async function handleAgentSend(text:string) {
@@ -1115,8 +1186,14 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
     // The agent endpoint is text-only; images would be silently dropped, so
     // stop here instead of falling through to the wrong API.
     if(agentMode&&images.length>0){toast('The agent can\'t read images yet — turn Agent Mode off to send them',false);return;}
+    if(useImage&&images.length>0){toast('Image prompts are text-only — remove the attachments or turn Create image off',false);return;}
     const imgs=images; setInput(''); setImages([]); if(taRef.current) taRef.current.style.height='auto';
     if(agentMode&&text){ await handleAgentSend(text); return; }
+    // The "Create image" pill forces it; with the pill off, natural phrasing
+    // like "draw a fox" routes here too (only when the feature is available).
+    // The pill is one-shot: it resets after each send so a follow-up question
+    // ("where is it?") lands in chat instead of becoming another image job.
+    if(text&&(useImage||(imgGen?.enabled&&imgGen.allowed&&detectImageIntent(text)))){ setUseImage(false); await sendImageGen(text); return; }
     await sendMsg(text,undefined,imgs);
   }
 
@@ -1478,6 +1555,10 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
                 <div style={{display:'flex',alignItems:'center',gap:4,flexWrap:'wrap'}}>
                   <FeaturePill icon={<Ico.Globe/>} label="Search" active={useSearch} onClick={()=>setUseSearch(s=>!s)}/>
                   <FeaturePill icon={<Ico.Flask/>} label="Deep research" active={useDeep} onClick={()=>setUseDeep(d=>!d)}/>
+                  {imgGen?.enabled&&imgGen.allowed&&(
+                    <FeaturePill icon={<Ico.Palette/>} label={!imgGen.unlimited&&imgGen.remaining<imgGen.dailyLimit?`Create image (${imgGen.remaining})`:'Create image'} active={useImage}
+                      onClick={()=>setUseImage(s=>{const on=!s; if(on){setUseSearch(false);setUseDeep(false);} return on;})}/>
+                  )}
                   <FeaturePill icon={<Ico.File/>} label={docs.length>0?`Docs (${docs.length})`:'Docs'} active={ragActive||docsOpen} onClick={()=>{setDocsOpen(o=>!o);setUploadErr(null);}}/>
                   <FeaturePill icon={<Ico.Book/>} label={prompts.length>0?`Prompts (${prompts.length})`:'Prompts'} active={promptsOpen} onClick={()=>setPromptsOpen(o=>!o)}/>
                   {toolsOk&&<FeaturePill icon={<Ico.Tool/>} label={toolIds.length>0?`Tools (${toolIds.length})`:'Tools'} active={toolsOpen||toolIds.length>0} onClick={()=>setToolsOpen(o=>!o)}/>}
@@ -1503,7 +1584,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
                     <IcoBtn onClick={()=>tts.stop()} active={true} title="Stop reading"><Ico.Vol/></IcoBtn>
                   )}
                   {streaming
-                    ? <button onClick={()=>abortRef.current?.abort()} aria-label="Stop generating"
+                    ? <button onClick={stopInFlight} aria-label="Stop generating"
                         style={{width:34,height:34,borderRadius:0,background:'var(--bg-3)',border:'1px solid var(--bd-2)',color:'var(--fg-3)',display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',transition:'background .12s',flexShrink:0}}
                         onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background='var(--bg-4)'}
                         onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background='var(--bg-3)'}>

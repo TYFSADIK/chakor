@@ -78,6 +78,12 @@ export const Markdown = memo(function Markdown({ children }: { children: string 
         th:     ({children})=><th>{children}</th>,
         td:     ({children})=><td>{children}</td>,
         tr:     ({children})=><tr>{children}</tr>,
+        // Generated/attached images (workspace /api/workspace/... URLs) render
+        // inline, capped to the bubble width, still click-through downloadable.
+        img:    ({src,alt})=>(
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={src} alt={alt??''} loading="lazy" style={{maxWidth:'100%',maxHeight:480,border:'1px solid var(--bd-2)',display:'block',margin:'6px 0'}}/>
+        ),
       }}>
       {children}
     </ReactMarkdown>

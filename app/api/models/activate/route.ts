@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@/lib/auth';
 import type { Session } from 'next-auth';
 import { getModel } from '@/lib/models';
-import { engineForProvider, activateEngine } from '@/lib/backends';
+import { engineForProvider, activateEngine, ImageSwapBusyError } from '@/lib/backends';
 import { detectHardware } from '@/lib/hardware';
 import { canRunMultipleModels } from '@/lib/hwfit';
 import { readAppSettings, writeAppSettings } from '@/lib/app-settings';
@@ -48,8 +48,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, exclusive: false, freed: [], llamaStarted: false, target });
   }
 
-  const { freed, llamaStarted } = await activateEngine(target);
-  return NextResponse.json({ ok: true, exclusive: true, freed, llamaStarted, target });
+  try {
+    const { freed, llamaStarted } = await activateEngine(target);
+    return NextResponse.json({ ok: true, exclusive: true, freed, llamaStarted, target });
+  } catch (e) {
+    if (e instanceof ImageSwapBusyError) {
+      return NextResponse.json({ ok: false, error: e.message }, { status: 409 });
+    }
+    throw e;
+  }
 }
 
 // PUT { multiModel } — turn keeping multiple models loaded on or off. Admin only.

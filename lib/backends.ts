@@ -185,6 +185,20 @@ export function chatInflightCount(): number { return inflightChats; }
 export function trackChatStart(): void { inflightChats++; }
 export function trackChatEnd(): void { inflightChats = Math.max(0, inflightChats - 1); }
 
+// ─── Image-generation swap flag ───────────────────────────────────────────────
+// While an image generates in swap mode, the GPU belongs to sd-server and the
+// chat model is deliberately stopped. Nothing may restart llama-server during
+// that window — it would crash on VRAM and take the image job down with it.
+let imageSwapActive = false;
+export function setImageSwapActive(v: boolean): void { imageSwapActive = v; }
+export function isImageSwapActive(): boolean { return imageSwapActive; }
+
+export class ImageSwapBusyError extends Error {}
+/** The user-facing holding answer while an image job owns the GPU. Shared by
+ *  the guard error and the chat route's streamed reply so they never drift. */
+export const IMAGE_SWAP_BUSY_MESSAGE =
+  'An image is being generated — the chat model will be back when it finishes. Ask again in a moment.';
+
 /** Free every local engine except `target`. Returns human labels of what we freed. */
 export async function freeEnginesExcept(target: EngineId | null): Promise<string[]> {
   const freed: string[] = [];
@@ -212,6 +226,12 @@ export async function freeEnginesExcept(target: EngineId | null): Promise<string
 export async function ensureLlamaActive(): Promise<void> {
   if (!llamaSupervisor.enabled) return;
   if ((await liveProps()).online) return; // already serving
+  if (imageSwapActive) {
+    // The GPU is mid-image-generation; restarting llama now would crash it on
+    // VRAM and kill the image job. Chat callers surface this as a friendly
+    // holding message instead of retrying.
+    throw new ImageSwapBusyError(IMAGE_SWAP_BUSY_MESSAGE);
+  }
   const cfg = await readRuntimeEnv();
   const modelPath = await resolveModelPath(cfg);
   let ctx = cfg.ctx ?? 8192;

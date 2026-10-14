@@ -9,6 +9,7 @@ import {
   updateConversationTitle,
   getChunksForUser,
   memoriesForPrompt,
+  getSetting,
 } from '@/lib/db';
 import { generateTitle } from '@/lib/llama';
 import { streamForModel } from '@/lib/dispatch';
@@ -19,7 +20,7 @@ import { runDeepResearch } from '@/lib/research';
 import { bm25Search, formatRagContext } from '@/lib/rag';
 import { llamaEndpoint, resolveChatModel, MASKED_MODEL_ID } from '@/lib/models';
 import { buildSystemPrompt, buildResearchPrompt } from '@/lib/system-prompt';
-import { engineForProvider, activateEngine, lastActiveEngine, trackChatStart, trackChatEnd } from '@/lib/backends';
+import { engineForProvider, activateEngine, lastActiveEngine, trackChatStart, trackChatEnd, isImageSwapActive, IMAGE_SWAP_BUSY_MESSAGE } from '@/lib/backends';
 import { readAppSettings } from '@/lib/app-settings';
 import { logger, errText } from '@/lib/logger';
 import { randomUUID } from 'node:crypto';
@@ -96,9 +97,14 @@ export async function POST(req: NextRequest) {
   // different local engine than the last one, evict the others first so the new
   // model has room instead of OOM-crashing. Skips instantly when nothing changed,
   // and never blocks the chat on its own failure.
+  const target = engineForProvider(selectedModel.provider);
+  // While an image generates in swap mode the chat model is deliberately down
+  // and the GPU belongs to sd-server. Restarting llama now would crash it on
+  // VRAM and kill the image job — so the chat gets a friendly holding answer
+  // (persisted like a normal reply) instead of an engine switch.
+  const imageSwapBusy = target === 'llama' && isImageSwapActive();
   try {
-    const target = engineForProvider(selectedModel.provider);
-    if (target && target !== lastActiveEngine() && !(await readAppSettings()).multiModel) {
+    if (target && !imageSwapBusy && target !== lastActiveEngine() && !(await readAppSettings()).multiModel) {
       await activateEngine(target);
     }
   } catch { /* best effort */ }
@@ -178,7 +184,10 @@ export async function POST(req: NextRequest) {
     throw e;
   }
 
-  let systemPrompt = useDeepResearch ? buildResearchPrompt() : buildSystemPrompt();
+  // Admin-set behavioral instructions (cheap sqlite read per request) apply
+  // to every chat; research mode keeps its own dedicated prompt.
+  const customInstructions = getSetting('custom_instructions') ?? undefined;
+  let systemPrompt = useDeepResearch ? buildResearchPrompt() : buildSystemPrompt({ customInstructions });
   // Recall: fold the user's saved memories into the system prompt so the
   // assistant carries context across conversations.
   const mems = memoriesForPrompt(userId);
@@ -231,35 +240,42 @@ export async function POST(req: NextRequest) {
     for (const s of researchSteps) sink.send({ toolEvent: s });
 
     try {
-      const deltaStream = useTools
-        ? runAgent({
-            model: selectedModel,
-            messages: chatMessages,
-            toolIds,
-            userId,
-            signal: req.signal,
-            onStats: (stats) => sink.send({ stats }),
-            onTool: (e) => sink.send({ toolEvent: e }),
-          })
-        : streamForModel({
-            modelId: selectedModel.id,
-            messages: chatMessages,
-            system: systemPrompt,
-            contextSize: ctxSize,
-            // Research briefings should be factual, not creative.
-            temperature: useDeepResearch ? 0.4 : undefined,
-            signal: req.signal,
-            onStats: (stats) => sink.send({ stats }),
-          });
+      if (imageSwapBusy) {
+        // Persisted like any other reply (the finally below saves fullResponse),
+        // so the history shows a real answer rather than a failure.
+        fullResponse = IMAGE_SWAP_BUSY_MESSAGE;
+        sink.send({ delta: fullResponse });
+      } else {
+        const deltaStream = useTools
+          ? runAgent({
+              model: selectedModel,
+              messages: chatMessages,
+              toolIds,
+              userId,
+              signal: req.signal,
+              onStats: (stats) => sink.send({ stats }),
+              onTool: (e) => sink.send({ toolEvent: e }),
+            })
+          : streamForModel({
+              modelId: selectedModel.id,
+              messages: chatMessages,
+              system: systemPrompt,
+              contextSize: ctxSize,
+              // Research briefings should be factual, not creative.
+              temperature: useDeepResearch ? 0.4 : undefined,
+              signal: req.signal,
+              onStats: (stats) => sink.send({ stats }),
+            });
 
-      for await (const delta of deltaStream) {
-        fullResponse += delta;
-        // Best-effort backpressure: if the client reads slower than the model
-        // produces, yield a tick before piling more into the queue.
-        if (sink.desiredSize !== null && sink.desiredSize <= 0) {
-          await new Promise<void>((r) => setImmediate(r));
+        for await (const delta of deltaStream) {
+          fullResponse += delta;
+          // Best-effort backpressure: if the client reads slower than the model
+          // produces, yield a tick before piling more into the queue.
+          if (sink.desiredSize !== null && sink.desiredSize <= 0) {
+            await new Promise<void>((r) => setImmediate(r));
+          }
+          if (!sink.send({ delta })) break; // client disconnected mid-stream
         }
-        if (!sink.send({ delta })) break; // client disconnected mid-stream
       }
     } catch (err: unknown) {
       const isAbort = err instanceof Error && (err.name === 'AbortError' || err.message.includes('aborted'));
