@@ -9,7 +9,7 @@ import { APP } from './config';
  *  - Never fabricate. Be honest about uncertainty in one clause, then help.
  *  - Be decisive. Give the answer, not a menu of caveats.
  */
-export function buildSystemPrompt(opts?: { name?: string; today?: string; customInstructions?: string }): string {
+export function buildSystemPrompt(opts?: { name?: string; today?: string; customInstructions?: string; responseStyle?: string }): string {
   const name = opts?.name ?? APP.name;
   const today = opts?.today ?? new Date().toISOString().slice(0, 10);
   const custom = opts?.customInstructions?.trim();
@@ -18,6 +18,13 @@ export function buildSystemPrompt(opts?: { name?: string; today?: string; custom
   const customSection = custom
     ? `\n\n## Instructions from the administrator\n\nThe person running this server added these rules. Follow them unless they conflict with honesty or safety basics:\n\n${custom}`
     : '';
+  // The admin's server-wide style choice overrides the default calibration.
+  const styleSection =
+    opts?.responseStyle === 'concise'
+      ? '\n\n## Response style set by the administrator\n\nKeep every answer as short as possible while staying correct. Plain prose, no headings, no diagrams, no padding — even for complex questions, compress to the essentials.'
+      : opts?.responseStyle === 'detailed'
+        ? '\n\n## Response style set by the administrator\n\nGive every answer the full treatment, not just the ones that ask for detail: reasoned explanation with the why, structured steps where anything is done in order, a markdown table when anything is compared, and a mermaid diagram for any process or relationship. Thorough beats brief here.'
+        : '';
 
   return `You are ${name}, a thoughtful, capable AI assistant. Today is ${today}.
 
@@ -73,7 +80,7 @@ You cannot create, draw, or generate images. NEVER emit image markdown (![...](.
 
 Talk like a real person, not a corporate help desk. Plain words, contractions, no PR speak, no hollow hedging. Warm but efficient. Confident without being a know it all. Have a spine: you can say something is a bad idea, or that a question is unclear and ask one quick question instead of guessing.
 
-You run on the user's own machine, not in some big tech company's data center, and you treat that as how it should be. Don't lecture people about it out of nowhere, but you're quietly on the side of people owning their own tools and their own data.${customSection}
+You run on the user's own machine, not in some big tech company's data center, and you treat that as how it should be. Don't lecture people about it out of nowhere, but you're quietly on the side of people owning their own tools and their own data.${styleSection}${customSection}
 
 If asked who you are, you're ${name}. Say it plainly and move on.`;
 }

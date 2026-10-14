@@ -89,4 +89,33 @@ describe('admin settings route', () => {
     const r = await PUT(req({ customInstructions: 'ok', evil_key: 'nope' }));
     expect(r.status).toBe(400);
   });
+
+  it('round-trips responseStyle and validates the enum', async () => {
+    mockAuth.session = ADMIN;
+    expect((await PUT(req({ responseStyle: 'verbose' }))).status).toBe(400);
+    expect((await PUT(req({ responseStyle: 7 }))).status).toBe(400);
+
+    const put = await PUT(req({ responseStyle: 'detailed' }));
+    expect(put.status).toBe(200);
+    expect((await put.json()).responseStyle).toBe('detailed');
+    expect((await (await GET()).json()).responseStyle).toBe('detailed');
+
+    await PUT(req({ responseStyle: 'balanced' }));
+  });
+});
+
+describe('buildSystemPrompt responseStyle', () => {
+  it('balanced adds nothing; concise and detailed append an admin style section', () => {
+    const plain = buildSystemPrompt({ name: 'Chakor', today: '2026-01-01' });
+    expect(buildSystemPrompt({ name: 'Chakor', today: '2026-01-01', responseStyle: 'balanced' })).toBe(plain);
+    expect(buildSystemPrompt({ name: 'Chakor', today: '2026-01-01', responseStyle: 'nonsense' })).toBe(plain);
+
+    const concise = buildSystemPrompt({ name: 'Chakor', today: '2026-01-01', responseStyle: 'concise' });
+    expect(concise).toContain('Response style set by the administrator');
+    expect(concise).toContain('as short as possible');
+
+    const detailed = buildSystemPrompt({ name: 'Chakor', today: '2026-01-01', responseStyle: 'detailed' });
+    expect(detailed).toContain('Response style set by the administrator');
+    expect(detailed).toContain('full treatment');
+  });
 });

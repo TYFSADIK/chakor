@@ -13,6 +13,9 @@ import {
   listImageModels,
   getActiveImageModel,
   imageModelsDir,
+  imageQuality,
+  isImageQuality,
+  estimateImageSeconds,
 } from '@/lib/image-gen';
 import { sdCapabilities } from '@/lib/sd-server';
 import { detectHardware } from '@/lib/hardware';
@@ -41,12 +44,16 @@ export async function GET() {
     detectHardware(),
   ]);
 
+  const mode = decideImageMode(hw);
+  const quality = imageQuality();
   return NextResponse.json({
     enabled: settings.enabled,
     allowlist: settings.allowlist,
     engine: 'stable-diffusion.cpp',
     online: caps !== null,
-    mode: decideImageMode(hw),
+    mode,
+    quality,
+    etaSeconds: estimateImageSeconds(mode, quality),
     modelsDir: imageModelsDir(),
     activeModel,
     models: models.map((m) => ({ name: m.name, sizeBytes: m.size, active: m.name === activeModel })),
@@ -61,12 +68,12 @@ export async function PUT(req: NextRequest) {
   if (!body || typeof body !== 'object') {
     return NextResponse.json({ error: 'invalid body' }, { status: 400 });
   }
-  const unknown = Object.keys(body).filter((k) => k !== 'enabled' && k !== 'allowlist');
+  const unknown = Object.keys(body).filter((k) => k !== 'enabled' && k !== 'allowlist' && k !== 'quality');
   if (unknown.length) {
     return NextResponse.json({ error: `unknown setting: ${unknown.join(', ')}` }, { status: 400 });
   }
 
-  const b = body as { enabled?: unknown; allowlist?: unknown };
+  const b = body as { enabled?: unknown; allowlist?: unknown; quality?: unknown };
   if (b.enabled !== undefined) {
     if (typeof b.enabled !== 'boolean') {
       return NextResponse.json({ error: 'enabled must be a boolean' }, { status: 400 });
@@ -81,6 +88,12 @@ export async function PUT(req: NextRequest) {
     const valid = (b.allowlist as number[]).filter((id) => !!getUserById(id));
     setSetting('image_gen_allowlist', JSON.stringify(valid));
   }
+  if (b.quality !== undefined) {
+    if (!isImageQuality(b.quality)) {
+      return NextResponse.json({ error: 'quality must be fast, balanced, or quality' }, { status: 400 });
+    }
+    setSetting('image_quality', b.quality);
+  }
 
-  return NextResponse.json(readImageGenSettings());
+  return NextResponse.json({ ...readImageGenSettings(), quality: imageQuality() });
 }

@@ -358,6 +358,29 @@ describe('image gen settings + allowlist', () => {
   });
 });
 
+describe('image quality presets', () => {
+  it('map to size/steps and drive the ETA estimate', () => {
+    dbm.setSetting('image_quality', 'fast');
+    expect(imggen.imageQuality()).toBe('fast');
+    expect(imggen.defaultImageSize('swap')).toEqual({ width: 512, height: 512 });
+    expect(imggen.defaultImageSteps()).toBe(12);
+    dbm.setSetting('image_quality', 'balanced');
+    expect(imggen.defaultImageSize('swap')).toEqual({ width: 768, height: 768 });
+    expect(imggen.defaultImageSteps()).toBe(20);
+    dbm.setSetting('image_quality', 'quality');
+    expect(imggen.defaultImageSize('swap')).toEqual({ width: 1024, height: 1024 });
+    expect(imggen.defaultImageSteps()).toBe(30);
+    // A garbage stored value falls back to the quality default.
+    dbm.setSetting('image_quality', 'ultra');
+    expect(imggen.imageQuality()).toBe('quality');
+    expect(imggen.defaultImageSteps()).toBe(30);
+    // ETA ordering: slower presets and swap mode cost more.
+    expect(imggen.estimateImageSeconds('swap', 'quality')).toBeGreaterThan(imggen.estimateImageSeconds('swap', 'fast'));
+    expect(imggen.estimateImageSeconds('parallel', 'quality')).toBeLessThan(imggen.estimateImageSeconds('swap', 'quality'));
+    dbm.setSetting('image_quality', 'quality');
+  });
+});
+
 describe('GET /api/images', () => {
   it('rejects unauthenticated requests with 401', async () => {
     mockAuth.session = null;
@@ -408,6 +431,7 @@ describe('admin images route', () => {
     expect((await adminPUT(req({ enabled: 'yes' }))).status).toBe(400);
     expect((await adminPUT(req({ allowlist: 'everyone' }))).status).toBe(400);
     expect((await adminPUT(req({ nope: 1 }))).status).toBe(400);
+    expect((await adminPUT(req({ quality: 'ultra' }))).status).toBe(400);
 
     const r = await adminPUT(req({ enabled: true }));
     expect(r.status).toBe(200);
@@ -416,6 +440,11 @@ describe('admin images route', () => {
     const a = await adminPUT(req({ allowlist: [1, 2, 999999] }));
     expect(a.status).toBe(200);
     expect((await a.json()).allowlist).toEqual([1, 2]); // unknown ids dropped
+
+    const q = await adminPUT(req({ quality: 'fast' }));
+    expect(q.status).toBe(200);
+    expect((await q.json()).quality).toBe('fast');
+    await adminPUT(req({ quality: 'quality' })); // restore for the flow test
   });
 
   it('reports the stable-diffusion.cpp engine, mode, and models', async () => {
@@ -543,6 +572,12 @@ describe('POST /api/images/generate full flow (stub sd-server, swap mode)', () =
       expect(imgFrame!.image.url).toBe(`/api/workspace/${convId}/files/${imgFrame!.image.name}`);
       expect(frames.some((f) => f.userMsgId)).toBe(true);
       expect(frames.some((f) => f.assistantMsgId)).toBe(true);
+      // The ETA frame the client timer runs on, with the request's geometry.
+      const etaFrame = frames.find((f) => typeof f.eta === 'number') as { eta: number; width: number; steps: number } | undefined;
+      expect(etaFrame).toBeTruthy();
+      expect(etaFrame!.eta).toBeGreaterThan(0);
+      expect(etaFrame!.width).toBe(1024);
+      expect(etaFrame!.steps).toBe(30);
 
       // Masking: no model file names or paths in anything the client saw.
       expect(text).not.toMatch(/\.gguf/);

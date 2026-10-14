@@ -34,6 +34,13 @@ Image generation on your own GPU, powered by stable-diffusion.cpp.
   applies only when the engine actually reports step progress), and closing
   or refreshing the tab never kills a render — the result is persisted and
   waiting when you come back.
+- Quality presets (Admin → Image Generation): fast (512²/12 steps),
+  balanced (768²/20), quality (1024²/30, the default). While a render runs,
+  the composer shows a live elapsed/remaining timer driven by a
+  hardware-aware estimate.
+- Response style preset (Admin → Model Behavior): concise, balanced
+  (default), or detailed — applied server-wide to every chat's system
+  prompt, alongside the existing free-form custom instructions.
 - Per-user rate limit of 10 images per day (IMAGE_DAILY_LIMIT), persisted in
   the database. Admins are never limited — they run the hardware.
 - Workspace file downloads now serve images inline (and to share-link

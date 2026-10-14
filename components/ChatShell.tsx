@@ -34,6 +34,24 @@ const fmtBytes = (b: number|null) => { if(!b)return''; if(b<1024)return`${b}B`; 
 const inits = (n: string|null|undefined) => (n??'U').split(/\s+/).map(w=>w[0]).join('').toUpperCase().slice(0,2);
 const toMd = (msgs: Msg[]) => msgs.map(m=>`**${m.role==='user'?'You':APP.name}:**\n\n${m.content}`).join('\n\n---\n\n');
 
+const fmtClock = (s: number) => `${Math.floor(s/60)}:${String(Math.floor(s%60)).padStart(2,'0')}`;
+
+/** Live elapsed/estimated-remaining chip shown while an image renders. The
+ *  estimate comes from the server (hardware + quality preset), so it is an
+ *  honest ballpark, not a countdown promise. */
+function ImageTimerChip({ start, eta }: { start: number; eta: number }) {
+  const [, force] = useState(0);
+  useEffect(() => { const t = setInterval(() => force(n=>n+1), 1000); return () => clearInterval(t); }, []);
+  const elapsed = Math.max(0, Math.floor((Date.now()-start)/1000));
+  const remaining = eta - elapsed;
+  return (
+    <div style={{display:'flex',alignItems:'center',gap:8,padding:'7px 12px',marginBottom:8,border:'1px solid var(--bd-2)',background:'var(--bg-1)',fontSize:12,color:'var(--fg-3)',fontFamily:'Newsreader,Georgia,serif'}}>
+      <span style={{width:7,height:7,borderRadius:'50%',background:'var(--g,#4ade80)',animation:'pulse 2s infinite',flexShrink:0}}/>
+      <span>Rendering image · <b style={{color:'var(--fg)'}}>{fmtClock(elapsed)}</b> elapsed{remaining>0?<> · ≈<b style={{color:'var(--fg)'}}>{fmtClock(remaining)}</b> left</>:' · taking longer than estimated'}</span>
+    </div>
+  );
+}
+
 function groupConvs(convs: Conv[]) {
   const d=new Date(); d.setHours(0,0,0,0); const t=d.getTime()/1000;
   const g=[{l:'Today',i:[]},{l:'Yesterday',i:[]},{l:'Last 7 days',i:[]},{l:'Older',i:[]}] as {l:string;i:Conv[]}[];
@@ -699,6 +717,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   // Image generation: server-reported capability (enabled + allowed for this
   // user) and the composer toggle for "this message is an image prompt".
   const [imgGen, setImgGen] = useState<{enabled:boolean;allowed:boolean;remaining:number;dailyLimit:number;unlimited?:boolean}|null>(null);
+  const [imgEta, setImgEta] = useState<{start:number;eta:number}|null>(null);
   const [useImage, setUseImage] = useState(false);
   const [useRag, setUseRag] = useState(true);
   const [input, setInput] = useState('');
@@ -1128,9 +1147,10 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
       const reader=r.body!.getReader(); const dec=new TextDecoder(); let buf='';
       outer:while(true){const{done,value}=await reader.read(); if(done) break; buf+=dec.decode(value,{stream:true}); const parts=buf.split('\n\n'); buf=parts.pop()??'';
         for(const part of parts){const lines=part.split('\n').filter(l=>l.startsWith('data:')); if(!lines.length) continue; const data=lines.map(l=>l.slice(5)).join('\n').trim(); if(data==='[DONE]') break outer;
-          try{const p=JSON.parse(data) as {delta?:string;userMsgId?:number;assistantMsgId?:number;image?:{name:string;url:string;prompt:string}};
+          try{const p=JSON.parse(data) as {delta?:string;userMsgId?:number;assistantMsgId?:number;eta?:number;image?:{name:string;url:string;prompt:string}};
             if(p.userMsgId) updateMsgs(prev=>{const u=[...prev];const i=u.length-2;if(i>=0&&u[i].role==='user')u[i]={...u[i],dbId:p.userMsgId};return u;});
             if(p.assistantMsgId) updateMsgs(prev=>{const u=[...prev];u[u.length-1]={...u[u.length-1],dbId:p.assistantMsgId};return u;});
+            if(p.eta) setImgEta(et=>et??{start:Date.now(),eta:p.eta as number});
             if(p.image){acc+=`\n\n![${p.image.prompt.slice(0,80)}](${p.image.url})\n\n`;scheduleFlush();}
             if(p.delta){acc+=p.delta;scheduleFlush();}
           }catch{}
@@ -1145,6 +1165,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
       ended=true; flush();
       abortRef.current=null; setStreaming(false);
       imgGenJobRef.current=null;
+      setImgEta(null);
       setImgGen(g=>g&&!g.unlimited?{...g,remaining:Math.max(0,g.remaining-1)}:g);
       if(isFirst&&resolvedId) setTimeout(()=>refreshTitle(resolvedId!),1500);
     }
@@ -1522,6 +1543,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
               </div>
             )}
 
+            {imgEta&&<ImageTimerChip start={imgEta.start} eta={imgEta.eta}/>}
             <div style={{background:'var(--bg-2)',border:`1px solid ${dragImg?'var(--g)':'var(--bd-2)'}`,borderRadius:0,transition:'border-color .15s, box-shadow .15s'}}
               onFocusCapture={e=>{ const el=e.currentTarget as HTMLElement; el.style.borderColor='var(--g-bd)'; el.style.boxShadow='0 0 0 3px var(--g-dim)'; }}
               onBlurCapture={e=>{ const el=e.currentTarget as HTMLElement; el.style.borderColor='var(--bd-2)'; el.style.boxShadow='none'; }}

@@ -779,6 +779,9 @@ export function recordImageGeneration(userId: number): void {
 }
 
 // ─── App settings (server-wide, admin-editable) ────────────────────
+export const RESPONSE_STYLES = ['concise', 'balanced', 'detailed'] as const;
+export type ResponseStyle = (typeof RESPONSE_STYLES)[number];
+
 export function getSetting(key: string): string | null {
   const row = db().prepare('SELECT value FROM app_settings WHERE key = ?').get(key) as { value: string } | undefined;
   return row?.value ?? null;

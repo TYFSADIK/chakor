@@ -187,7 +187,8 @@ export async function POST(req: NextRequest) {
   // Admin-set behavioral instructions (cheap sqlite read per request) apply
   // to every chat; research mode keeps its own dedicated prompt.
   const customInstructions = getSetting('custom_instructions') ?? undefined;
-  let systemPrompt = useDeepResearch ? buildResearchPrompt() : buildSystemPrompt({ customInstructions });
+  const responseStyle = getSetting('response_style') ?? undefined;
+  let systemPrompt = useDeepResearch ? buildResearchPrompt() : buildSystemPrompt({ customInstructions, responseStyle });
   // Recall: fold the user's saved memories into the system prompt so the
   // assistant carries context across conversations.
   const mems = memoriesForPrompt(userId);

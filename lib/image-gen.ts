@@ -84,9 +84,37 @@ export function hardwareCanAttemptImageGen(hw: Hardware): boolean {
   return hw.hasGpu || hw.unifiedMemory;
 }
 
-/** Default canvas: 1024² everywhere — Iris is trained at 1024 and smaller
- *  sizes show patch artifacts. Admins can override via IMAGE_DEFAULT_SIZE. */
+// ─── Quality presets (admin-selectable) ──────────────────────────
+// Iris is trained at 1024² and smaller sizes show patch artifacts, so
+// 'quality' is the default; fast/balanced trade fidelity for speed on
+// small cards. The admin-panel choice (image_quality setting) wins over
+// the IMAGE_DEFAULT_SIZE / IMAGE_DEFAULT_STEPS env overrides.
+export type ImageQuality = 'fast' | 'balanced' | 'quality';
+
+export const IMAGE_QUALITY_PRESETS: Record<ImageQuality, { width: number; height: number; steps: number }> = {
+  fast:     { width: 512,  height: 512,  steps: 12 },
+  balanced: { width: 768,  height: 768,  steps: 20 },
+  quality:  { width: 1024, height: 1024, steps: 30 },
+};
+
+export const IMAGE_QUALITIES = Object.keys(IMAGE_QUALITY_PRESETS) as ImageQuality[];
+
+export function isImageQuality(v: unknown): v is ImageQuality {
+  return typeof v === 'string' && (IMAGE_QUALITIES as string[]).includes(v);
+}
+
+/** The admin's chosen preset (default 'quality'). */
+export function imageQuality(): ImageQuality {
+  const v = getSetting('image_quality');
+  return isImageQuality(v) ? v : 'quality';
+}
+
 export function defaultImageSize(mode: ImageMode): { width: number; height: number } {
+  const q = getSetting('image_quality');
+  if (isImageQuality(q)) {
+    const p = IMAGE_QUALITY_PRESETS[q];
+    return { width: p.width, height: p.height };
+  }
   const raw = process.env.IMAGE_DEFAULT_SIZE;
   if (raw) {
     const m = /^(\d{2,4})\s*x\s*(\d{2,4})$/i.exec(raw.trim());
@@ -95,10 +123,25 @@ export function defaultImageSize(mode: ImageMode): { width: number; height: numb
   return { width: 1024, height: 1024 };
 }
 
-/** Iris is clean at 30 steps (the model author's measured setting); 20 leaves artifacts. */
 export function defaultImageSteps(): number {
+  const q = getSetting('image_quality');
+  if (isImageQuality(q)) return IMAGE_QUALITY_PRESETS[q].steps;
   const n = Number(process.env.IMAGE_DEFAULT_STEPS);
   return Number.isFinite(n) && n > 0 ? Math.min(100, Math.floor(n)) : 30;
+}
+
+/**
+ * Rough render-time estimate in seconds, shown as the ETA in the chat bubble.
+ * Calibrated on a 4 GB GTX 1650 Ti in swap mode (~28 min for quality);
+ * big cards in parallel mode are an order of magnitude faster. Honest
+ * ballpark, not a promise — the client shows it as "≈".
+ */
+export function estimateImageSeconds(mode: ImageMode, q: ImageQuality): number {
+  const table: Record<ImageMode, Record<ImageQuality, number>> = {
+    swap:     { fast: 240, balanced: 840, quality: 1800 },
+    parallel: { fast: 30,  balanced: 75,  quality: 150 },
+  };
+  return table[mode][q];
 }
 
 // ─── Image model management (GGUF files in <sdDir>/models) ───────

@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireUser, isAdminSession } from '@/lib/guard';
-import { getSetting, setSetting } from '@/lib/db';
+import { getSetting, setSetting, RESPONSE_STYLES } from '@/lib/db';
 
 // Server-wide settings editable from the admin panel. The whitelist keeps
 // this route from becoming a generic key/value store by accident.
 const EDITABLE_SETTINGS = {
   customInstructions: 'custom_instructions',
+  responseStyle: 'response_style',
 } as const;
 
 const MAX_INSTRUCTIONS_CHARS = 4000;
@@ -25,6 +26,7 @@ export async function GET() {
 
   return NextResponse.json({
     customInstructions: getSetting(EDITABLE_SETTINGS.customInstructions) ?? '',
+    responseStyle: getSetting(EDITABLE_SETTINGS.responseStyle) ?? 'balanced',
   });
 }
 
@@ -43,15 +45,26 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ error: `unknown setting: ${unknownKeys.join(', ')}` }, { status: 400 });
   }
 
-  const raw = (body as { customInstructions?: unknown }).customInstructions;
-  if (typeof raw !== 'string') {
-    return NextResponse.json({ error: 'customInstructions must be a string' }, { status: 400 });
+  const b = body as { customInstructions?: unknown; responseStyle?: unknown };
+  if (b.customInstructions !== undefined) {
+    if (typeof b.customInstructions !== 'string') {
+      return NextResponse.json({ error: 'customInstructions must be a string' }, { status: 400 });
+    }
+    const value = b.customInstructions.trim();
+    if (value.length > MAX_INSTRUCTIONS_CHARS) {
+      return NextResponse.json({ error: `customInstructions too long (max ${MAX_INSTRUCTIONS_CHARS} chars)` }, { status: 400 });
+    }
+    setSetting(EDITABLE_SETTINGS.customInstructions, value);
   }
-  const value = raw.trim();
-  if (value.length > MAX_INSTRUCTIONS_CHARS) {
-    return NextResponse.json({ error: `customInstructions too long (max ${MAX_INSTRUCTIONS_CHARS} chars)` }, { status: 400 });
+  if (b.responseStyle !== undefined) {
+    if (typeof b.responseStyle !== 'string' || !(RESPONSE_STYLES as readonly string[]).includes(b.responseStyle)) {
+      return NextResponse.json({ error: `responseStyle must be one of: ${RESPONSE_STYLES.join(', ')}` }, { status: 400 });
+    }
+    setSetting(EDITABLE_SETTINGS.responseStyle, b.responseStyle);
   }
 
-  setSetting(EDITABLE_SETTINGS.customInstructions, value);
-  return NextResponse.json({ customInstructions: value });
+  return NextResponse.json({
+    customInstructions: getSetting(EDITABLE_SETTINGS.customInstructions) ?? '',
+    responseStyle: getSetting(EDITABLE_SETTINGS.responseStyle) ?? 'balanced',
+  });
 }

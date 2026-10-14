@@ -10,6 +10,7 @@
  */
 import * as path from 'node:path';
 import * as os from 'node:os';
+import * as fs from 'node:fs';
 
 // ─── Configuration ───────────────────────────────────────────────
 export function sdUrl(): string {
@@ -26,9 +27,24 @@ export function sdDir(): string {
   return process.env.SDCPP_DIR ?? path.join(os.homedir(), 'stable-diffusion.cpp');
 }
 
-/** Text encoder (Qwen3-VL) for the Iris pipeline. */
+/**
+ * Text encoder (Qwen3-VL) for the Iris pipeline. SDCPP_ENCODER wins; otherwise
+ * auto-discover one in the models dir, preferring the Sakura-matched
+ * uncensored encoder, then the stock instruct build, then anything
+ * encoder-shaped.
+ */
 export function sdEncoderPath(): string {
-  return process.env.SDCPP_ENCODER ?? path.join(sdDir(), 'models', 'Qwen3VL-4B-Instruct-Q4_K_M.gguf');
+  if (process.env.SDCPP_ENCODER) return process.env.SDCPP_ENCODER;
+  const dir = path.join(sdDir(), 'models');
+  let files: string[] = [];
+  try {
+    files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.gguf') && !f.endsWith('.part'));
+  } catch { /* dir missing — fall through to the legacy default */ }
+  for (const re of [/sakura.*textencoder/i, /qwen3vl-4b-instruct/i, /qwen3vl|textencoder|mmproj/i]) {
+    const hit = files.find((f) => re.test(f));
+    if (hit) return path.join(dir, hit);
+  }
+  return path.join(dir, 'Qwen3VL-4B-Instruct-Q4_K_M.gguf');
 }
 
 export class ImageGenError extends Error {}

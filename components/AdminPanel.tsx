@@ -114,10 +114,12 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
   const [instr, setInstr] = useState('');
   const [instrLoaded, setInstrLoaded] = useState(false);
   const [savingInstr, setSavingInstr] = useState(false);
+  const [respStyle, setRespStyle] = useState<'concise'|'balanced'|'detailed'>('balanced');
   // Image generation settings card (stable-diffusion.cpp backend).
   type ImgModel = { name: string; sizeBytes: number; active: boolean };
+  type ImgQuality = 'fast' | 'balanced' | 'quality';
   type ImgSettings = { enabled: boolean; allowlist: number[]; engine: string; online: boolean;
-    mode: 'swap' | 'parallel'; modelsDir: string; activeModel: string | null; models: ImgModel[] };
+    mode: 'swap' | 'parallel'; quality: ImgQuality; etaSeconds: number; modelsDir: string; activeModel: string | null; models: ImgModel[] };
   const [img, setImg] = useState<ImgSettings | null>(null);
   const [imgUsers, setImgUsers] = useState<User[]>([]);
   const [savingImg, setSavingImg] = useState(false);
@@ -134,19 +136,19 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
   const loadStats = useCallback(async()=>{ setLoading(true); setError(''); try{const r=await fetch('/api/admin/stats');if(!r.ok)throw new Error(await r.text());setStats(await r.json());setLastRefresh(new Date());}catch(e){setError(String(e));}finally{setLoading(false);}}, []);
   const loadUsers = useCallback(async()=>{ setLoading(true); setError(''); try{const r=await fetch('/api/admin/users');if(!r.ok)throw new Error(await r.text());setUsers(await r.json());setLastRefresh(new Date());}catch(e){setError(String(e));}finally{setLoading(false);}}, []);
   const loadSystem = useCallback(async()=>{ try{const r=await fetch('/api/admin/system');if(r.ok)setSystem(await r.json());}catch{} }, []);
-  const loadSettings = useCallback(async()=>{ try{const r=await fetch('/api/admin/settings');if(r.ok){const d=await r.json();setInstr(d.customInstructions??'');} setInstrLoaded(true);}catch{setInstrLoaded(true);} }, []);
+  const loadSettings = useCallback(async()=>{ try{const r=await fetch('/api/admin/settings');if(r.ok){const d=await r.json();setInstr(d.customInstructions??'');setRespStyle(d.responseStyle==='concise'||d.responseStyle==='detailed'?d.responseStyle:'balanced');} setInstrLoaded(true);}catch{setInstrLoaded(true);} }, []);
   const loadImg = useCallback(async()=>{ try{const r=await fetch('/api/admin/images');if(r.ok)setImg(await r.json());}catch{} },[]);
   // The allowlist picker needs the user list even on the dashboard tab.
   const loadImgUsers = useCallback(async()=>{ try{const r=await fetch('/api/admin/users');if(r.ok)setImgUsers(await r.json());}catch{} },[]);
 
-  async function saveImg(patch: { enabled?: boolean; allowlist?: number[] }) {
+  async function saveImg(patch: { enabled?: boolean; allowlist?: number[]; quality?: ImgQuality }) {
     if(savingImg)return;
     setSavingImg(true);
     try{
       const r=await fetch('/api/admin/images',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)});
       const d=await r.json().catch(()=>null);
       if(!r.ok){notify(d?.error??'Failed to save image settings',false);return;}
-      setImg(p=>p?{...p,enabled:d.enabled,allowlist:d.allowlist}:p);
+      setImg(p=>p?{...p,enabled:d.enabled,allowlist:d.allowlist,quality:d.quality??p.quality}:p);
       notify('Image generation settings saved');
     }catch{notify('Network error, please try again',false);}
     finally{setSavingImg(false);}
@@ -167,11 +169,11 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
     if(savingInstr)return;
     setSavingInstr(true);
     try{
-      const r=await fetch('/api/admin/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({customInstructions:instr})});
+      const r=await fetch('/api/admin/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({customInstructions:instr,responseStyle:respStyle})});
       const d=await r.json().catch(()=>null);
       if(!r.ok){notify(d?.error??'Failed to save instructions',false);return;}
       setInstr(d.customInstructions??'');
-      notify('Model instructions saved');
+      notify('Model behavior saved');
     }catch{notify('Network error, please try again',false);}
     finally{setSavingInstr(false);}
   }
@@ -302,14 +304,26 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
 
             {stats.dailyStats&&stats.dailyStats.length>0&&<ActivityChart data={stats.dailyStats}/>}
 
-            {/* Model instructions */}
+            {/* Model behavior: response style + free-form instructions */}
             <div style={{background:'var(--bg-1)',border:'1px solid var(--bd-2)',borderRadius:0,padding:'18px 20px'}}>
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14}}>
                 <div>
-                  <p className="headline" style={{fontSize:15,marginBottom:2}}>Model Instructions</p>
-                  <p className="byline" style={{textTransform:'none'}}>These instructions apply to every chat on this server.</p>
+                  <p className="headline" style={{fontSize:15,marginBottom:2}}>Model Behavior</p>
+                  <p className="byline" style={{textTransform:'none'}}>Response style and custom instructions apply to every chat on this server.</p>
                 </div>
               </div>
+              <p className="byline" style={{marginBottom:8}}>Response style</p>
+              <div style={{display:'flex',gap:6,marginBottom:14,flexWrap:'wrap'}}>
+                {([['concise','Concise','short, direct answers, minimal structure'],['balanced','Balanced','length matched to the question'],['detailed','Detailed','always thorough: steps, tables, diagrams']] as const).map(([v,label,hint])=>(
+                  <button key={v} onClick={()=>setRespStyle(v)} disabled={!instrLoaded}
+                    title={hint}
+                    style={{flex:'1 1 140px',textAlign:'left',padding:'8px 12px',borderRadius:0,cursor:'pointer',border:`1px solid ${respStyle===v?'var(--g-bd)':'var(--bd-2)'}`,background:respStyle===v?'var(--g-dim)':'transparent',transition:'all .15s'}}>
+                    <span style={{display:'block',fontSize:12.5,fontWeight:600,color:respStyle===v?'var(--g-text)':'var(--fg-2)',fontFamily:'Newsreader,Georgia,serif'}}>{label}</span>
+                    <span style={{display:'block',fontSize:11,color:'var(--fg-4)',marginTop:2}}>{hint}</span>
+                  </button>
+                ))}
+              </div>
+              <p className="byline" style={{marginBottom:8}}>Custom instructions</p>
               <textarea
                 value={instr}
                 onChange={e=>setInstr(e.target.value)}
@@ -364,6 +378,22 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
                       </div>
                     </div>
                   )}
+
+                  <div>
+                    <p className="byline" style={{marginBottom:8}}>Image quality preset{img.mode==='swap'?' (times measured on this machine)':''}</p>
+                    <div style={{display:'flex',gap:6,flexWrap:'wrap'}}>
+                      {([['fast','Fast','512×512 · 12 steps'],['balanced','Balanced','768×768 · 20 steps'],['quality','Quality','1024×1024 · 30 steps']] as const).map(([v,label,hint])=>(
+                        <button key={v} disabled={savingImg} onClick={()=>saveImg({quality:v})}
+                          style={{flex:'1 1 140px',textAlign:'left',padding:'8px 12px',borderRadius:0,cursor:'pointer',border:`1px solid ${img.quality===v?'var(--g-bd)':'var(--bd-2)'}`,background:img.quality===v?'var(--g-dim)':'transparent',transition:'all .15s'}}>
+                          <span style={{display:'block',fontSize:12.5,fontWeight:600,color:img.quality===v?'var(--g-text)':'var(--fg-2)',fontFamily:'Newsreader,Georgia,serif'}}>{label}</span>
+                          <span style={{display:'block',fontSize:11,color:'var(--fg-4)',marginTop:2}}>{hint}</span>
+                        </button>
+                      ))}
+                    </div>
+                    <p style={{fontSize:11.5,color:'var(--fg-4)',margin:'8px 0 0'}}>
+                      Users see a live timer with this estimate while an image renders: ≈{img.etaSeconds>=90?`${Math.round(img.etaSeconds/60)} min`:`${img.etaSeconds} s`} for the current preset{img.mode==='swap'?' (swap mode)':' (parallel mode)'}.
+                    </p>
+                  </div>
 
                   <div>
                     <p className="byline" style={{marginBottom:8}}>Models ({img.modelsDir})</p>

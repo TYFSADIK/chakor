@@ -34,7 +34,10 @@ export async function POST(req: NextRequest) {
 
   // Non-admins are pinned to the server's default model whatever id they send.
   const model = resolveChatModel(modelId, isAdminSession(session));
-  const system = buildSystemPrompt({ customInstructions: getSetting('custom_instructions') ?? undefined });
+  const system = buildSystemPrompt({
+    customInstructions: getSetting('custom_instructions') ?? undefined,
+    responseStyle: getSetting('response_style') ?? undefined,
+  });
   const messages: ChatMessage[] = [
     { role: 'system', content: system },
     { role: 'user', content: prompt },

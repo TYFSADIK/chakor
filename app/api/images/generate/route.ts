@@ -49,6 +49,8 @@ import {
   defaultImageSteps,
   getActiveImageModel,
   imageModelPath,
+  imageQuality,
+  estimateImageSeconds,
   runImageJob,
   trackImageJob,
   clearImageJob,
@@ -160,11 +162,16 @@ export async function POST(req: NextRequest) {
       }
 
       const mode = decideImageMode(hw);
+      const quality = imageQuality();
       const { width, height } = defaultImageSize(mode);
       const steps = defaultImageSteps();
+      // The client runs a live elapsed/remaining timer off this estimate.
+      const eta = estimateImageSeconds(mode, quality);
+      sink.send({ eta, width, height, steps });
+      const etaText = eta >= 90 ? `~${Math.round(eta / 60)} min` : `~${eta} s`;
 
       const bytes = await runImageJob(mode, imageModelPath(model), async () => {
-        sink.send({ delta: '_Generating image… on this machine a full-quality image can take up to ~30 minutes. You can leave this page — it will appear here when it\'s done._\n\n' });
+        sink.send({ delta: `_Generating image (${width}×${height}, ${steps} steps)… estimated ${etaText} on this machine. You can leave this page — it will appear here when it's done._\n\n` });
         const jobId = await submitImgGen(
           buildImgGenRequest({ prompt, width, height, steps, seed: -1 }),
         );
