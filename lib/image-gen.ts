@@ -23,10 +23,11 @@ import type { Hardware } from './hardware';
 import { chatInflightCount, ensureLlamaActive, setImageSwapActive } from './backends';
 import { llamaSupervisor } from './llama-supervisor';
 import { sdSupervisor } from './sd-supervisor';
-import { sdDir, ImageGenError } from './sd-server';
+import { sdDir, ImageGenError, ENCODER_RE, sanitizeGgufName } from './sd-server';
 import { logger, errText } from './logger';
 
 export { ImageGenError };
+export { sanitizeGgufName } from './sd-server';
 
 // ─── Admin settings (app_settings table) ─────────────────────────
 // Off by default: no user can generate images until an admin flips it on.
@@ -157,8 +158,6 @@ export function imageModelsDir(): string {
   return path.join(sdDir(), 'models');
 }
 
-const ENCODER_RE = /qwen3vl|mmproj|encoder/i;
-
 export interface ImageModelFile { name: string; size: number }
 
 /** Diffusion-model GGUFs only — the text encoder is infrastructure, never a choice. */
@@ -174,14 +173,6 @@ export async function listImageModels(): Promise<ImageModelFile[]> {
   } catch {
     return [];
   }
-}
-
-/** Basename-only .gguf names; anything else (traversal, separators) is null. */
-export function sanitizeGgufName(name: string): string | null {
-  if (typeof name !== 'string') return null;
-  const base = path.basename(name);
-  if (base !== name || base.startsWith('.') || !base.toLowerCase().endsWith('.gguf')) return null;
-  return base;
 }
 
 export function imageModelPath(name: string): string {

@@ -1,10 +1,11 @@
 /**
  * GET /api/admin/images — image-generation status for the admin panel:
  * feature flag, allowlist, engine label (stable-diffusion.cpp), sd-server
- * reachability, swap/parallel mode, and the installed GGUF models.
+ * reachability, swap/parallel mode, and the installed GGUF models + encoders.
  * PUT /api/admin/images — { enabled?, allowlist? } updates the settings.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import * as path from 'node:path';
 import { requireUser, isAdminSession } from '@/lib/guard';
 import { setSetting, getUserById } from '@/lib/db';
 import {
@@ -17,7 +18,7 @@ import {
   isImageQuality,
   estimateImageSeconds,
 } from '@/lib/image-gen';
-import { sdCapabilities } from '@/lib/sd-server';
+import { sdCapabilities, listEncoders, resolveEncoderPath } from '@/lib/sd-server';
 import { detectHardware } from '@/lib/hardware';
 
 export const runtime = 'nodejs';
@@ -57,6 +58,8 @@ export async function GET() {
     modelsDir: imageModelsDir(),
     activeModel,
     models: models.map((m) => ({ name: m.name, sizeBytes: m.size, active: m.name === activeModel })),
+    activeEncoder: path.basename(resolveEncoderPath()),
+    encoders: listEncoders().map((e) => ({ name: e.name, sizeBytes: e.size, active: e.name === path.basename(resolveEncoderPath()) })),
   });
 }
 

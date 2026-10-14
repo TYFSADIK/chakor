@@ -718,6 +718,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
   // user) and the composer toggle for "this message is an image prompt".
   const [imgGen, setImgGen] = useState<{enabled:boolean;allowed:boolean;remaining:number;dailyLimit:number;unlimited?:boolean}|null>(null);
   const [imgEta, setImgEta] = useState<{start:number;eta:number}|null>(null);
+  const [imgPreview, setImgPreview] = useState<{src:string|null;step:number;total:number}|null>(null);
   const [useImage, setUseImage] = useState(false);
   const [useRag, setUseRag] = useState(true);
   const [input, setInput] = useState('');
@@ -1147,10 +1148,11 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
       const reader=r.body!.getReader(); const dec=new TextDecoder(); let buf='';
       outer:while(true){const{done,value}=await reader.read(); if(done) break; buf+=dec.decode(value,{stream:true}); const parts=buf.split('\n\n'); buf=parts.pop()??'';
         for(const part of parts){const lines=part.split('\n').filter(l=>l.startsWith('data:')); if(!lines.length) continue; const data=lines.map(l=>l.slice(5)).join('\n').trim(); if(data==='[DONE]') break outer;
-          try{const p=JSON.parse(data) as {delta?:string;userMsgId?:number;assistantMsgId?:number;eta?:number;image?:{name:string;url:string;prompt:string}};
+          try{const p=JSON.parse(data) as {delta?:string;userMsgId?:number;assistantMsgId?:number;eta?:number;preview?:{step:number;total:number;image:string|null};image?:{name:string;url:string;prompt:string}};
             if(p.userMsgId) updateMsgs(prev=>{const u=[...prev];const i=u.length-2;if(i>=0&&u[i].role==='user')u[i]={...u[i],dbId:p.userMsgId};return u;});
             if(p.assistantMsgId) updateMsgs(prev=>{const u=[...prev];u[u.length-1]={...u[u.length-1],dbId:p.assistantMsgId};return u;});
             if(p.eta) setImgEta(et=>et??{start:Date.now(),eta:p.eta as number});
+            if(p.preview) setImgPreview({src:p.preview.image??null,step:p.preview.step,total:p.preview.total});
             if(p.image){acc+=`\n\n![${p.image.prompt.slice(0,80)}](${p.image.url})\n\n`;scheduleFlush();}
             if(p.delta){acc+=p.delta;scheduleFlush();}
           }catch{}
@@ -1166,6 +1168,7 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
       abortRef.current=null; setStreaming(false);
       imgGenJobRef.current=null;
       setImgEta(null);
+      setImgPreview(null);
       setImgGen(g=>g&&!g.unlimited?{...g,remaining:Math.max(0,g.remaining-1)}:g);
       if(isFirst&&resolvedId) setTimeout(()=>refreshTitle(resolvedId!),1500);
     }
@@ -1465,6 +1468,20 @@ export default function ChatShell({ user, initialConversations }: { user: User; 
                 onRegen={m.role==='assistant'&&!streaming&&i===msgs.length-1?()=>handleRegen(i):undefined}
                 tts={tts} density={density} showStats={showStats} userInits={userInits}/>
             ))}
+            {imgPreview&&(
+              <div className="anim-fade-in" style={{maxWidth:380,margin:'4px 0 8px'}}>
+                {imgPreview.src&&(
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={imgPreview.src} alt="Image being generated" style={{width:'100%',display:'block',border:'1px solid var(--bd-2)',filter:'saturate(.9)'}}/>
+                )}
+                <div style={{marginTop:6,height:4,background:'var(--bg-2)',border:'1px solid var(--bd-2)',overflow:'hidden'}}>
+                  <div style={{height:'100%',width:`${imgPreview.total>0?Math.min(100,Math.round(imgPreview.step/imgPreview.total*100)):0}%`,background:'var(--g,#4ade80)',transition:'width .8s ease'}}/>
+                </div>
+                <p style={{fontSize:11.5,color:'var(--fg-4)',margin:'5px 0 0',fontFamily:'Newsreader,Georgia,serif'}}>
+                  Step {imgPreview.step} of {imgPreview.total} — the picture sharpens as it goes
+                </p>
+              </div>
+            )}
             <div ref={endRef}/>
           </div>
         </div>

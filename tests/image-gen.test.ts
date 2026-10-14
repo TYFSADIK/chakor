@@ -14,7 +14,9 @@ process.env.CHAKOR_DB_PATH = path.join(tmp, 'test.db');
 const sdTmp = path.join(tmp, 'sdcpp');
 fs.mkdirSync(path.join(sdTmp, 'models'), { recursive: true });
 const SAKURA = 'Sakura-Iris-3B-Q4_K_M-3.14GiB.gguf';
-for (const f of [SAKURA, 'model-b.gguf', 'model-c.gguf', 'Qwen3VL-4B-Instruct-Q4_K_M.gguf']) {
+const ENC_INSTRUCT = 'Qwen3VL-4B-Instruct-Q4_K_M.gguf';
+const ENC_SAKURA = 'Sakura-TextEncoder-Qwen3VL-4B-Uncensored-4bit.gguf';
+for (const f of [SAKURA, 'model-b.gguf', 'model-c.gguf', ENC_INSTRUCT, ENC_SAKURA]) {
   fs.writeFileSync(path.join(sdTmp, 'models', f), Buffer.alloc(1024));
 }
 process.env.SDCPP_DIR = sdTmp;
@@ -170,9 +172,22 @@ describe('buildImgGenRequest', () => {
       seed: -1,
       batch_count: 1,
       sample_params: { sample_method: 'dpm++2m', sample_steps: 20, guidance: { txt_cfg: 3 } },
-      preview: 'none',
+      preview: 'proj', // live in-progress frames for the chat UI
+      preview_interval: 1,
       output_format: 'png',
     });
+  });
+  it('honors an explicit preview mode and the SDCPP_PREVIEW override', () => {
+    expect(sd.buildImgGenRequest({ prompt: 'x', width: 512, height: 512, preview: 'none' }).preview).toBe('none');
+    const saved = process.env.SDCPP_PREVIEW;
+    process.env.SDCPP_PREVIEW = 'tae';
+    try {
+      expect(sd.buildImgGenRequest({ prompt: 'x', width: 512, height: 512 }).preview).toBe('tae');
+      process.env.SDCPP_PREVIEW = 'bogus'; // unknown values fall back to proj
+      expect(sd.buildImgGenRequest({ prompt: 'x', width: 512, height: 512 }).preview).toBe('proj');
+    } finally {
+      if (saved === undefined) delete process.env.SDCPP_PREVIEW; else process.env.SDCPP_PREVIEW = saved;
+    }
   });
   it('floors dimensions to multiples of 16 and clamps to 1024', () => {
     const b = sd.buildImgGenRequest({ prompt: 'x', width: 500, height: 2000 });
@@ -238,6 +253,21 @@ describe('pollJob', () => {
     const out = await sd.pollJob('job_1', undefined, (s, t) => seen.push([s, t]));
     expect(seen).toEqual([[5, 20]]);
     expect(out.steps).toEqual({ step: 5, total: 20 });
+  });
+
+  it('forwards live preview frames only when they change', async () => {
+    const frames = [
+      { id: 'j', status: 'generating', preview: { step: 1, total_steps: 4, b64_json: 'QUFB' } },
+      { id: 'j', status: 'generating', preview: { step: 1, total_steps: 4, b64_json: 'QUFB' } }, // unchanged — skipped
+      { id: 'j', status: 'generating', preview: { step: 2, total_steps: 4, b64_json: 'QkJC' } },
+      { id: 'j', status: 'completed', result: { images: [{ b64_json: png.toString('base64') }] } },
+    ];
+    let i = 0;
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      new Response(JSON.stringify(frames[Math.min(i++, frames.length - 1)]), { status: 200 })));
+    const seen: Array<[number, number, string | undefined]> = [];
+    await sd.pollJob('j', undefined, (s, t, b) => seen.push([s, t, b]));
+    expect(seen).toEqual([[1, 4, 'QUFB'], [2, 4, 'QkJC']]);
   });
 
   it('throws the engine error message when the job fails', async () => {
@@ -516,6 +546,50 @@ describe('admin imagemodels route', () => {
     await imagemodels.POST(req({ name: SAKURA }));
     expect(await imggen.getActiveImageModel()).toBe(SAKURA);
   });
+
+  it('lists encoders separately and tracks the active one', async () => {
+    mockAuth.session = ADMIN;
+    const d = await (await imagemodels.GET()).json();
+    const names = d.encoders.map((e: { name: string }) => e.name);
+    expect(names).toEqual(expect.arrayContaining([ENC_INSTRUCT, ENC_SAKURA]));
+    // Auto-discovery prefers the Sakura-matched uncensored encoder.
+    expect(d.encoders.find((e: { name: string }) => e.name === ENC_SAKURA).active).toBe(true);
+  });
+
+  it('sets the active encoder; the panel choice wins over auto-discovery', async () => {
+    mockAuth.session = ADMIN;
+    expect((await imagemodels.POST(req({ encoder: '../secret.gguf' }))).status).toBe(400);
+    expect((await imagemodels.POST(req({ encoder: 'missing-encoder.gguf' }))).status).toBe(404);
+    // A diffusion model is not an encoder.
+    expect((await imagemodels.POST(req({ encoder: SAKURA }))).status).toBe(404);
+
+    const r = await imagemodels.POST(req({ encoder: ENC_INSTRUCT }));
+    expect(r.status).toBe(200);
+    const d = await r.json();
+    expect(d.encoders.find((e: { name: string }) => e.name === ENC_INSTRUCT).active).toBe(true);
+    expect(sd.resolveEncoderPath()).toBe(path.join(sdTmp, 'models', ENC_INSTRUCT));
+  });
+
+  it('refuses to delete the active encoder; deletes others from disk', async () => {
+    mockAuth.session = ADMIN;
+    expect((await imagemodels.DELETE(req({ encoder: ENC_INSTRUCT }))).status).toBe(409); // active
+    expect((await imagemodels.DELETE(req({ encoder: 'missing-encoder.gguf' }))).status).toBe(404);
+
+    const r = await imagemodels.DELETE(req({ encoder: ENC_SAKURA }));
+    expect(r.status).toBe(200);
+    expect(fs.existsSync(path.join(sdTmp, 'models', ENC_SAKURA))).toBe(false);
+  });
+
+  it('falls back to auto-discovery when the saved encoder is gone', async () => {
+    mockAuth.session = ADMIN;
+    // The Sakura encoder was deleted above; ENC_INSTRUCT is still the saved
+    // choice and exists. Deleting the file (not via the route) leaves a stale
+    // setting that resolveEncoderPath must ignore.
+    dbm.setSetting('image_encoder', ENC_SAKURA);
+    expect(sd.resolveEncoderPath()).toBe(path.join(sdTmp, 'models', ENC_INSTRUCT));
+    // Restore the panel choice for the flow test below.
+    dbm.setSetting('image_encoder', ENC_INSTRUCT);
+  });
 });
 
 describe('POST /api/images/generate full flow (stub sd-server, swap mode)', () => {
@@ -525,6 +599,7 @@ describe('POST /api/images/generate full flow (stub sd-server, swap mode)', () =
   it('streams the image frame, swaps the GPU in order, and persists everything', async () => {
     const png = Buffer.from('89504e470d0a1a0a', 'hex');
     const got: { body?: Record<string, unknown> } = {};
+    let polls = 0;
     const server = http.createServer((rq, rs) => {
       const url = new URL(rq.url ?? '/', 'http://x');
       const json = (o: unknown, code = 200) => { rs.writeHead(code, { 'Content-Type': 'application/json' }); rs.end(JSON.stringify(o)); };
@@ -540,6 +615,10 @@ describe('POST /api/images/generate full flow (stub sd-server, swap mode)', () =
         return;
       }
       if (url.pathname === '/sdcpp/v1/jobs/job_1') {
+        polls++;
+        if (polls === 1) {
+          return json({ id: 'job_1', status: 'generating', preview: { step: 3, total_steps: 30, b64_json: 'UFJFVklFVw' } });
+        }
         return json({ id: 'job_1', status: 'completed', result: { images: [{ b64_json: png.toString('base64') }] } });
       }
       rs.writeHead(404); rs.end();
@@ -578,6 +657,13 @@ describe('POST /api/images/generate full flow (stub sd-server, swap mode)', () =
       expect(etaFrame!.eta).toBeGreaterThan(0);
       expect(etaFrame!.width).toBe(1024);
       expect(etaFrame!.steps).toBe(30);
+      // Live preview: the stub's in-progress frame streams to the client as a
+      // data URL with step progress.
+      const prevFrame = frames.find((f) => f.preview) as { preview: { step: number; total: number; image: string } } | undefined;
+      expect(prevFrame).toBeTruthy();
+      expect(prevFrame!.preview.step).toBe(3);
+      expect(prevFrame!.preview.total).toBe(30);
+      expect(prevFrame!.preview.image).toBe('data:image/png;base64,UFJFVklFVw');
 
       // Masking: no model file names or paths in anything the client saw.
       expect(text).not.toMatch(/\.gguf/);

@@ -36,11 +36,17 @@ Image generation on your own GPU, powered by stable-diffusion.cpp.
   waiting when you come back.
 - Quality presets (Admin → Image Generation): fast (512²/12 steps),
   balanced (768²/20), quality (1024²/30, the default). While a render runs,
-  the composer shows a live elapsed/remaining timer driven by a
-  hardware-aware estimate.
+  the chat shows the image forming live — a fresh preview frame every
+  sampling step (SDCPP_PREVIEW, default proj), a step progress bar, and a
+  live elapsed/estimated-remaining timer driven by a hardware-aware estimate.
 - Response style preset (Admin → Model Behavior): concise, balanced
   (default), or detailed — applied server-wide to every chat's system
   prompt, alongside the existing free-form custom instructions.
+- Text-encoder selection (Admin → Image Generation): the panel lists every
+  encoder GGUF in the models folder next to the diffusion models, with
+  set-active and delete. The choice is applied the next time the engine
+  starts; SDCPP_ENCODER still overrides it, and auto-discovery prefers a
+  Sakura-matched encoder when no choice has been made.
 - Per-user rate limit of 10 images per day (IMAGE_DAILY_LIMIT), persisted in
   the database. Admins are never limited — they run the hardware.
 - Workspace file downloads now serve images inline (and to share-link

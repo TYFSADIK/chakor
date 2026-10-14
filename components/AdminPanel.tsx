@@ -119,7 +119,8 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
   type ImgModel = { name: string; sizeBytes: number; active: boolean };
   type ImgQuality = 'fast' | 'balanced' | 'quality';
   type ImgSettings = { enabled: boolean; allowlist: number[]; engine: string; online: boolean;
-    mode: 'swap' | 'parallel'; quality: ImgQuality; etaSeconds: number; modelsDir: string; activeModel: string | null; models: ImgModel[] };
+    mode: 'swap' | 'parallel'; quality: ImgQuality; etaSeconds: number; modelsDir: string; activeModel: string | null; models: ImgModel[];
+    activeEncoder: string | null; encoders: ImgModel[] };
   const [img, setImg] = useState<ImgSettings | null>(null);
   const [imgUsers, setImgUsers] = useState<User[]>([]);
   const [savingImg, setSavingImg] = useState(false);
@@ -154,14 +155,17 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
     finally{setSavingImg(false);}
   }
 
-  async function imgModelAction(method: 'POST' | 'DELETE', name: string) {
+  async function imgModelAction(method: 'POST' | 'DELETE', name: string, kind: 'model' | 'encoder' = 'model') {
     try{
-      const r=await fetch('/api/admin/imagemodels',{method,headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+      const r=await fetch('/api/admin/imagemodels',{method,headers:{'Content-Type':'application/json'},body:JSON.stringify(kind==='encoder'?{encoder:name}:{name})});
       const d=await r.json().catch(()=>null);
       if(!r.ok){notify(d?.error??'Model action failed',false);return;}
       const models=(d?.models??[]) as ImgModel[];
-      setImg(p=>p?{...p,models,activeModel:models.find(m=>m.active)?.name??null}:p);
-      notify(method==='POST'?'Active image model updated':'Model deleted');
+      const encoders=(d?.encoders??[]) as ImgModel[];
+      setImg(p=>p?{...p,models,activeModel:models.find(m=>m.active)?.name??null,encoders,activeEncoder:encoders.find(e=>e.active)?.name??null}:p);
+      notify(method==='POST'
+        ? (kind==='encoder'?'Active text encoder updated (applies to the next render)':'Active image model updated')
+        : (kind==='encoder'?'Encoder deleted':'Model deleted'));
     }catch{notify('Network error, please try again',false);}
   }
 
@@ -412,6 +416,25 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
                           ))}
                         </div>
                       : <p style={{fontSize:12.5,color:'var(--fg-4)',margin:0}}>No image models installed. Drop a diffusion-model .gguf into that folder, then refresh.</p>}
+                  </div>
+                  <div>
+                    <p className="byline" style={{marginBottom:8}}>Text encoder</p>
+                    {(img.encoders??[]).length>0
+                      ? <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                          {img.encoders.map(e=>(
+                            <div key={e.name} style={{display:'flex',alignItems:'center',gap:10,fontSize:12.5}}>
+                              <span style={{flex:1,color:'var(--fg-2)',fontFamily:TYPE,fontSize:11.5,wordBreak:'break-all'}}>{e.name} <span style={{color:'var(--fg-4)'}}>({(e.sizeBytes/1e9).toFixed(1)} GB)</span></span>
+                              {e.active
+                                ? <span style={{fontSize:11,color:'var(--ok)',fontFamily:TYPE,textTransform:'uppercase',letterSpacing:'0.08em'}}>active</span>
+                                : <>
+                                    <button onClick={()=>imgModelAction('POST',e.name,'encoder')} className="btn btn-outline" style={{fontSize:11,padding:'5px 12px'}}>Set active</button>
+                                    <button onClick={()=>imgModelAction('DELETE',e.name,'encoder')} className="btn btn-outline" style={{fontSize:11,padding:'5px 12px',color:'var(--err)'}}>Delete</button>
+                                  </>}
+                            </div>
+                          ))}
+                          <p style={{fontSize:11.5,color:'var(--fg-4)',margin:'4px 0 0'}}>Applied when the image engine next starts (swap mode: the next render).</p>
+                        </div>
+                      : <p style={{fontSize:12.5,color:'var(--fg-4)',margin:0}}>No text encoder found. Drop a Qwen3-VL encoder .gguf into the models folder, then refresh.</p>}
                   </div>
                 </div>
               )}

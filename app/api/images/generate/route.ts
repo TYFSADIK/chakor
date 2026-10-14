@@ -180,8 +180,14 @@ export async function POST(req: NextRequest) {
           // No abort signal on purpose: disconnecting must not kill the job.
           // A server-side 'cancelled' status (from /api/images/cancel) ends
           // the poll with ImageGenError('cancelled'), handled below.
-          const out = await pollJob(jobId, undefined, (step, total) => {
-            sink.send({ delta: `_Generating image… step ${step}/${total}_\n\n` });
+          const out = await pollJob(jobId, undefined, (step, total, previewB64) => {
+            sink.send({
+              preview: {
+                step,
+                total,
+                image: previewB64 ? `data:image/png;base64,${previewB64}` : null,
+              },
+            });
           });
           return out.bytes;
         } finally {

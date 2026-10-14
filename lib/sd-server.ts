@@ -11,6 +11,7 @@
 import * as path from 'node:path';
 import * as os from 'node:os';
 import * as fs from 'node:fs';
+import { getSetting, setSetting } from './db';
 
 // ─── Configuration ───────────────────────────────────────────────
 export function sdUrl(): string {
@@ -25,6 +26,35 @@ export function sdPort(): number {
 /** The stable-diffusion.cpp checkout; models live in <dir>/models/. */
 export function sdDir(): string {
   return process.env.SDCPP_DIR ?? path.join(os.homedir(), 'stable-diffusion.cpp');
+}
+
+/** GGUFs that are text encoders, not diffusion models (they share one dir). */
+export const ENCODER_RE = /qwen3vl|mmproj|encoder/i;
+
+/** Basename-only .gguf names; anything else (traversal, separators) is null. */
+export function sanitizeGgufName(name: string): string | null {
+  if (typeof name !== 'string') return null;
+  const base = path.basename(name);
+  if (base !== name || base.startsWith('.') || !base.toLowerCase().endsWith('.gguf')) return null;
+  return base;
+}
+
+export interface EncoderFile { name: string; size: number }
+
+/** Text-encoder GGUFs in the models dir (Qwen3-VL, mmproj, …). */
+export function listEncoders(): EncoderFile[] {
+  const dir = path.join(sdDir(), 'models');
+  try {
+    const out: EncoderFile[] = [];
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.toLowerCase().endsWith('.gguf') || f.endsWith('.part') || !ENCODER_RE.test(f)) continue;
+      const st = fs.statSync(path.join(dir, f));
+      if (st.isFile()) out.push({ name: f, size: st.size });
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -47,6 +77,32 @@ export function sdEncoderPath(): string {
   return path.join(dir, 'Qwen3VL-4B-Instruct-Q4_K_M.gguf');
 }
 
+const SETTING_ENCODER = 'image_encoder';
+
+/**
+ * The encoder actually used: the admin's panel choice when it still exists on
+ * disk, else the env/auto-discovery default. Takes effect on the next render
+ * (the engine loads the encoder at spawn).
+ */
+export function resolveEncoderPath(): string {
+  const saved = getSetting(SETTING_ENCODER);
+  if (saved) {
+    const clean = sanitizeGgufName(saved);
+    if (clean) {
+      const p = path.join(sdDir(), 'models', clean);
+      if (fs.existsSync(p)) return p;
+    }
+  }
+  return sdEncoderPath();
+}
+
+/** Persist the admin's encoder choice (callers validate existence first). */
+export function setActiveEncoder(name: string): void {
+  const clean = sanitizeGgufName(name);
+  if (!clean) throw new Error('invalid encoder name');
+  setSetting(SETTING_ENCODER, clean);
+}
+
 export class ImageGenError extends Error {}
 
 // ─── Request builder (pure) ──────────────────────────────────────
@@ -59,6 +115,14 @@ export interface ImgGenOpts {
   steps?: number;
   /** -1 = random. */
   seed?: number;
+  /** sd.cpp preview mode: 'none' | 'proj' | 'tae' | 'vae'. Default SDCPP_PREVIEW or 'proj'. */
+  preview?: string;
+}
+
+/** Live-preview mode for in-progress renders; SDCPP_PREVIEW overrides. */
+export function defaultPreviewMode(): string {
+  const v = (process.env.SDCPP_PREVIEW ?? 'proj').trim().toLowerCase();
+  return ['none', 'proj', 'tae', 'vae'].includes(v) ? v : 'proj';
 }
 
 function clampDim(n: number): number {
@@ -84,6 +148,7 @@ export interface ImgGenRequest {
     guidance: { txt_cfg: number };
   };
   preview: string;
+  preview_interval: number;
   output_format: string;
 }
 
@@ -100,7 +165,8 @@ export function buildImgGenRequest(opts: ImgGenOpts): ImgGenRequest {
       sample_steps: clampSteps(opts.steps),
       guidance: { txt_cfg: 3 },
     },
-    preview: 'none',
+    preview: opts.preview ?? defaultPreviewMode(),
+    preview_interval: 1,
     output_format: 'png',
   };
 }
@@ -150,7 +216,7 @@ interface SdJob {
   status: 'queued' | 'generating' | 'completed' | 'failed' | 'cancelled' | string;
   result?: { images?: Array<{ b64_json?: string }> } | null;
   error?: { message?: string } | null;
-  preview?: { step?: number; total_steps?: number } | null;
+  preview?: { pass?: number; step?: number; total_steps?: number; b64_json?: string } | null;
 }
 
 const POLL_INTERVAL_MS = 2000;
@@ -185,15 +251,19 @@ export interface SdJobResult {
  * Poll a job to its terminal state. Completed resolves with the PNG bytes;
  * failed/cancelled/timeout throw ImageGenError. When the caller's signal
  * fires, the job is cancelled server-side before throwing 'cancelled'.
+ * onProgress fires on every new step or new preview frame; previewB64 is the
+ * engine's latest in-progress PNG (base64) when the job runs with a preview
+ * mode, undefined otherwise.
  */
 export async function pollJob(
   id: string,
   signal?: AbortSignal,
-  onProgress?: (step: number, total: number) => void,
+  onProgress?: (step: number, total: number, previewB64?: string) => void,
 ): Promise<SdJobResult> {
   const hardDeadline = Date.now() + HARD_TIMEOUT_MIN * 60_000;
   let lastAdvanceAt = Date.now();
   let lastStep = 0;
+  let lastPreview: string | undefined;
   let sawProgress = false;
   let lastSteps: SdJobResult['steps'] = null;
   try {
@@ -217,11 +287,18 @@ export async function pollJob(
         if (p?.step && p?.total_steps) {
           lastSteps = { step: p.step, total: p.total_steps };
           sawProgress = true;
-          if (p.step > lastStep) {
+          const stepChanged = p.step > lastStep;
+          if (stepChanged) {
             lastStep = p.step;
             lastAdvanceAt = Date.now();
           }
-          onProgress?.(p.step, p.total_steps);
+          // Only forward when something actually changed — preview frames are
+          // ~1 MB, no sense re-streaming an identical one every poll.
+          const b64 = p.b64_json || undefined;
+          if (stepChanged || b64 !== lastPreview) {
+            onProgress?.(p.step, p.total_steps, b64);
+            lastPreview = b64;
+          }
         }
         if (job.status === 'completed') {
           const b64 = job.result?.images?.[0]?.b64_json;

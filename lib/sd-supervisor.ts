@@ -15,7 +15,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { sdDir, sdPort, sdEncoderPath, sdCapabilities } from './sd-server';
+import { sdDir, sdPort, resolveEncoderPath, sdCapabilities } from './sd-server';
 import { logger } from './logger';
 
 export interface SdStatus {
@@ -107,9 +107,9 @@ class SdSupervisor {
       this.lastError = `Image model not found at ${opts.modelPath}.`;
       return this.lastError;
     }
-    const encoder = sdEncoderPath();
+    const encoder = resolveEncoderPath();
     if (!fs.existsSync(encoder)) {
-      this.lastError = `Text encoder not found at ${encoder}. Set SDCPP_ENCODER.`;
+      this.lastError = `Text encoder not found at ${encoder}. Pick one in the admin panel or set SDCPP_ENCODER.`;
       return this.lastError;
     }
 
