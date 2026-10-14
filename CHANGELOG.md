@@ -25,9 +25,17 @@ Image generation on your own GPU, powered by stable-diffusion.cpp.
   with set-active and delete (no download pipeline — drop .gguf files into
   the models folder).
 - Generation runs in the background with progress in the bubble; the stop
-  button cancels the sd-server job. Error text shown to non-admins never
-  leaks model file names or server paths.
-- Per-user rate limit of 10 images per day, persisted in the database.
+  button cancels the sd-server job. The Create image pill is one-shot — it
+  resets after each send so a follow-up question lands in chat instead of
+  becoming another render. Error text shown to non-admins never leaks model
+  file names or server paths.
+- Slow-render proof: jobs run to completion no matter how long they take
+  (hard cap IMAGE_JOB_TIMEOUT_MINUTES, default 45; a no-progress watchdog
+  applies only when the engine actually reports step progress), and closing
+  or refreshing the tab never kills a render — the result is persisted and
+  waiting when you come back.
+- Per-user rate limit of 10 images per day (IMAGE_DAILY_LIMIT), persisted in
+  the database. Admins are never limited — they run the hardware.
 - Workspace file downloads now serve images inline (and to share-link
   viewers) so generated pictures render instead of downloading.
 
