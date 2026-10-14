@@ -20,8 +20,9 @@
 #
 #  Examples:
 #      bash install.sh                  # core tools + Ollama, then start
-#      bash install.sh --all            # also build llama.cpp (CUDA auto-detected)
+#      bash install.sh --all            # also llama.cpp + image generation + SearXNG
 #      bash install.sh --with-llama-cpp # add a local llama-server build
+#      bash install.sh --with-images    # add GPU image generation (sd-server + models)
 #      bash install.sh --service        # install + run as a systemd service
 #      sudo bash install.sh --yes       # fully unattended, e.g. a fresh server
 #      bash install.sh --dry-run        # show the plan, change nothing
@@ -50,6 +51,8 @@ ASSUME_YES="${CHAKOR_ASSUME_YES:-0}"
 INSTALL_OLLAMA=1
 WITH_LLAMA_CPP=0
 WITH_CUDA=0
+WITH_IMAGES=0
+WITH_SEARXNG=0
 DO_START=1
 INSTALL_SERVICE=0
 MINIMAL=0
@@ -57,6 +60,7 @@ DRY_RUN=0
 SUDO=""
 SUDO_KEEPALIVE_PID=""
 LLAMA_SERVER_BIN_BUILT=""
+SD_SERVER_BIN_BUILT=""
 
 # ---- pretty output, everything also tee'd to the log ------------------------
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -130,10 +134,13 @@ Usage:  bash install.sh [options]
 
 Options:
   -y, --yes            Non-interactive. Assume yes (or env CHAKOR_ASSUME_YES=1).
-      --all            Everything: core tools, Ollama, and build llama.cpp
-                       (CUDA is auto-detected if the toolkit is present).
+      --all            Everything: core tools, Ollama, llama.cpp, image
+                       generation (sd-server + models), and SearXNG web search.
       --with-llama-cpp Build a local llama-server from source.
       --with-cuda      Build llama.cpp with NVIDIA CUDA (implies --with-llama-cpp).
+      --with-images    Build stable-diffusion.cpp's sd-server and download the
+                       default image model + text encoder (~6 GB download).
+      --with-searxng   Run a local SearXNG container for web search (needs Docker).
       --no-ollama      Do not install Ollama.
       --minimal        Only Node + the app. Bring your own model engine.
       --service        Install + start a systemd service (runs 24/7, needs root/sudo).
@@ -152,9 +159,11 @@ EOF
 while [ $# -gt 0 ]; do
   case "$1" in
     -y|--yes|--non-interactive) ASSUME_YES=1 ;;
-    --all)             WITH_LLAMA_CPP=1; WITH_CUDA=1 ;;
+    --all)             WITH_LLAMA_CPP=1; WITH_CUDA=1; WITH_IMAGES=1; WITH_SEARXNG=1 ;;
     --with-llama-cpp|--with-llama) WITH_LLAMA_CPP=1 ;;
     --with-cuda)       WITH_LLAMA_CPP=1; WITH_CUDA=1 ;;
+    --with-images|--with-sdcpp) WITH_IMAGES=1 ;;
+    --with-searxng)    WITH_SEARXNG=1 ;;
     --no-ollama)       INSTALL_OLLAMA=0 ;;
     --minimal)         MINIMAL=1; INSTALL_OLLAMA=0 ;;
     --service)         INSTALL_SERVICE=1; DO_START=0 ;;
@@ -375,6 +384,104 @@ build_llama_cpp() {
   say "Built llama-server at $bin"
 }
 
+# ---- image generation: stable-diffusion.cpp's sd-server + models ------------
+# The default pair is Sakura-Iris-3B (Q4_K_M, runs on 4 GB cards) with the
+# Sakura uncensored Qwen3-VL text encoder — both from one Hugging Face repo.
+SD_HF_REPO="https://huggingface.co/webmp3/Sakura-Iris-3B-Uncensored-GGUF/resolve/main"
+SD_MODEL_FILE="Sakura-Iris-3B-Q4_K_M-3.14GiB.gguf"
+SD_ENCODER_FILE="Sakura-TextEncoder-Qwen3VL-4B-Uncensored-4bit-2.33GiB.gguf"
+SD_FALLBACK_ENCODER_URL="https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct-GGUF/resolve/main/Qwen3VL-4B-Instruct-Q4_K_M.gguf"
+
+build_sd_cpp() {
+  step "Building stable-diffusion.cpp (image engine) from source"
+  ensure_cmake || { warn "cmake is not available, cannot build stable-diffusion.cpp."; return 1; }
+  local src="${SDCPP_DIR:-$HOME/stable-diffusion.cpp}"
+  if [ -d "$src/.git" ]; then
+    run git -C "$src" pull --ff-only || true
+  else
+    retry 3 run git clone --depth 1 https://github.com/leejet/stable-diffusion.cpp "$src"
+  fi
+  local flags="-DCMAKE_BUILD_TYPE=Release"
+  if gpu_has_nvidia && have nvcc; then
+    flags="$flags -DSD_CUDA=ON"
+    say "CUDA toolkit found. Building sd-server with GPU acceleration."
+  elif [ "$OS" = "Darwin" ]; then
+    flags="$flags -DSD_METAL=ON"
+    say "Building sd-server with Apple Metal acceleration."
+  else
+    warn "No CUDA toolkit found — building a CPU sd-server. Image generation will be very slow."
+    gpu_has_nvidia && { warn "You have an NVIDIA GPU; install the CUDA toolkit and re-run with --with-images for GPU speed."; print_cuda_hint; }
+  fi
+  run cmake -S "$src" -B "$src/build" $flags
+  run cmake --build "$src/build" --config Release -j "$(nproc 2>/dev/null || echo 2)" --target sd-server
+  local bin="$src/build/bin/sd-server"
+  if [ "$DRY_RUN" -eq 1 ]; then info "   (dry-run) sd-server would build at $bin"; return 0; fi
+  [ -x "$bin" ] || { warn "sd-server was not produced by the build."; return 1; }
+  SD_SERVER_BIN_BUILT="$bin"
+  say "Built sd-server at $bin"
+}
+
+download_one() { # url dest — skip files that are already fully downloaded
+  local url="$1" dest="$2"
+  if [ -s "$dest" ] && [ ! -f "$dest.part" ]; then
+    info "   already have $(basename "$dest")"
+    return 0
+  fi
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf '   %s(dry-run) would download:%s %s\n' "$C_DIM" "$C_0" "$url"
+    return 0
+  fi
+  retry 3 run curl -fL --connect-timeout 20 -o "$dest.part" "$url" && mv "$dest.part" "$dest"
+}
+
+download_image_models() {
+  local dir="${CHAKOR_MODEL_HOME:-$HOME/models}"
+  step "Downloading the default image model + text encoder (~6 GB total)"
+  run mkdir -p "$dir"
+  download_one "$SD_HF_REPO/$SD_MODEL_FILE" "$dir/$SD_MODEL_FILE" || { warn "Image model download failed — grab it later from $SD_HF_REPO"; return 1; }
+  download_one "$SD_HF_REPO/$SD_ENCODER_FILE" "$dir/$SD_ENCODER_FILE" \
+    || download_one "$SD_FALLBACK_ENCODER_URL" "$dir/Qwen3VL-4B-Instruct-Q4_K_M.gguf" \
+    || { warn "Text encoder download failed — image generation needs one in $dir."; return 1; }
+  say "Image models ready in $dir"
+  info "   Bigger card? The Q8_0 render of Sakura-Iris-3B looks a little cleaner:"
+  info "   $SD_HF_REPO/Sakura-Iris-3B-Q8_0-4.15GiB.gguf"
+}
+
+# ---- SearXNG: private web search in a Docker container (optional) -----------
+# Without it, web search falls back to DuckDuckGo — this just makes it faster
+# and fully local.
+ensure_searxng() {
+  if curl -fsS -m 3 "http://127.0.0.1:8080/search?q=test&format=json" >/dev/null 2>&1; then
+    say "SearXNG already answering on port 8080."
+    return 0
+  fi
+  if ! have docker; then
+    warn "Docker not found — skipping SearXNG. Web search will use the DuckDuckGo fallback."
+    return 0
+  fi
+  step "Starting a local SearXNG container for web search"
+  local conf="$SCRIPT_DIR/.searxng"
+  run mkdir -p "$conf"
+  if [ "$DRY_RUN" -eq 0 ] && [ ! -f "$conf/settings.yml" ]; then
+    cat > "$conf/settings.yml" <<EOF
+use_default_settings: true
+server:
+  secret_key: "$(openssl rand -hex 32 2>/dev/null || echo change-me)"
+search:
+  formats:
+    - html
+    - json
+EOF
+  fi
+  if ! run docker ps -a --format '{{.Names}}' | grep -qx chakor-searxng; then
+    retry 2 run docker run -d --name chakor-searxng --restart unless-stopped \
+      -p 127.0.0.1:8080:8080 -v "$conf:/etc/searxng" searxng/searxng:latest
+  else
+    run docker start chakor-searxng || true
+  fi
+  say "SearXNG running on http://127.0.0.1:8080 (loopback only)."
+}
+
 # ---- the app itself: deps, .env.local, database, build ----------------------
 run_app_setup() {
   step "Installing app dependencies, writing config, building"
@@ -391,6 +498,26 @@ wire_llama_env() {
     printf 'LLAMA_SERVER_BIN="%s"\n' "$LLAMA_SERVER_BIN_BUILT" >> "$env"
   fi
   say "Pointed Chakor at your llama-server build."
+}
+wire_sd_env() {
+  [ -n "$SD_SERVER_BIN_BUILT" ] || return 0
+  local env="$SCRIPT_DIR/.env.local"
+  [ -f "$env" ] || return 0
+  if [ "$DRY_RUN" -eq 1 ]; then return 0; fi
+  local dir="${SDCPP_DIR:-$HOME/stable-diffusion.cpp}"
+  local home_dir="${CHAKOR_MODEL_HOME:-$HOME/models}"
+  if grep -q '^SDCPP_DIR=' "$env" 2>/dev/null; then
+    sed -i.bak "s|^SDCPP_DIR=.*|SDCPP_DIR=\"$dir\"|" "$env" && rm -f "$env.bak"
+  else
+    printf 'SDCPP_DIR="%s"\n' "$dir" >> "$env"
+  fi
+  # One shared models folder for chat, image, and encoder GGUFs.
+  if grep -q '^CHAKOR_MODEL_HOME=' "$env" 2>/dev/null; then
+    sed -i.bak "s|^CHAKOR_MODEL_HOME=.*|CHAKOR_MODEL_HOME=\"$home_dir\"|" "$env" && rm -f "$env.bak"
+  else
+    printf 'CHAKOR_MODEL_HOME="%s"\n' "$home_dir" >> "$env"
+  fi
+  say "Pointed Chakor at your sd-server build. Enable image generation per user under Admin -> Image Generation."
 }
 
 # ---- run it 24/7 as a service (runs as a normal user, not root) -------------
@@ -442,9 +569,11 @@ print_summary() {
   local bits="git, build tools, Node $(node -v 2>/dev/null || echo '?')"
   have ollama && bits="$bits, Ollama"
   [ -n "$LLAMA_SERVER_BIN_BUILT" ] && bits="$bits, llama.cpp"
+  [ -n "$SD_SERVER_BIN_BUILT" ] && bits="$bits, sd-server + image models"
   info "Installed: ${bits}."
   info ""
   info "Open      http://localhost:3001   (first account you register is the admin)"
+  info "Checkup   npm run doctor   (verifies every piece Chakor uses)"
   if ! have ollama && [ -z "$LLAMA_SERVER_BIN_BUILT" ]; then
     info "Get a model: install Ollama (re-run without --no-ollama), add a cloud key in"
     info "             .env.local, or download a GGUF from inside the app (Settings -> Models)."
@@ -483,9 +612,18 @@ main() {
   if [ "$WITH_LLAMA_CPP" -eq 1 ]; then
     optional "llama.cpp" build_llama_cpp
   fi
+  if [ "$WITH_IMAGES" -eq 1 ]; then
+    if optional "stable-diffusion.cpp" build_sd_cpp; then
+      optional "image models" download_image_models
+    fi
+  fi
+  if [ "$WITH_SEARXNG" -eq 1 ]; then
+    optional "SearXNG" ensure_searxng
+  fi
 
   run_app_setup
   wire_llama_env
+  wire_sd_env
 
   if [ "$INSTALL_SERVICE" -eq 1 ]; then
     if [ "$IS_ROOT" -eq 1 ] || [ -n "$SUDO" ]; then

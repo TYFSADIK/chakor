@@ -42,11 +42,25 @@ Image generation on your own GPU, powered by stable-diffusion.cpp.
 - Response style preset (Admin → Model Behavior): concise, balanced
   (default), or detailed — applied server-wide to every chat's system
   prompt, alongside the existing free-form custom instructions.
+- Browser model management: Admin → Image Generation now uploads GGUFs
+  straight into the shared models folder (chat, image, and encoder models
+  live together), with a live progress bar, per-file type tagging, and a
+  folder picker. The chat model picker scans the same folder and
+  automatically skips image/encoder files; in-app Hugging Face downloads
+  land there too (CHAKOR_MODEL_HOME).
 - Text-encoder selection (Admin → Image Generation): the panel lists every
   encoder GGUF in the models folder next to the diffusion models, with
   set-active and delete. The choice is applied the next time the engine
   starts; SDCPP_ENCODER still overrides it, and auto-discovery prefers a
   Sakura-matched encoder when no choice has been made.
+- One-command install now covers the whole stack: `install.sh --with-images`
+  (included in `--all`) builds stable-diffusion.cpp's sd-server with CUDA
+  auto-detected and downloads the default Sakura-Iris-3B model plus its
+  Qwen3-VL text encoder; `--with-searxng` starts a local SearXNG container
+  for web search. A new `npm run doctor` checkup (also run automatically at
+  the end of setup.sh) verifies every piece — Node, dependencies, the
+  database, chat models, the image engine, Python — and prints the fix for
+  whatever is missing.
 - Per-user rate limit of 10 images per day (IMAGE_DAILY_LIMIT), persisted in
   the database. Admins are never limited — they run the hardware.
 - Workspace file downloads now serve images inline (and to share-link

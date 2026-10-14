@@ -15,6 +15,7 @@ import { isVisionModel } from './models';
 import { matchingMmproj } from './huggingface';
 import { detectHardware } from './hardware';
 import { recommendedModelPath } from './hwfit';
+import { modelsHome, getModelKinds, configuredModelsHome } from './sd-server';
 
 const RUNTIME_ENV = process.env.CHAKOR_LLAMA_RUNTIME ?? path.join(process.cwd(), 'data', 'llama-runtime.env');
 
@@ -64,13 +65,17 @@ export interface LocalModel {
   vision: boolean;
 }
 
-const SKIP_RE = /mmproj|ggml-vocab|vocab|projector/i;
+// Vision projectors and vocab files are not chat models; neither are the
+// image pipeline's files (diffusion models, text encoders) when everything
+// lives in one shared models folder.
+const SKIP_RE = /mmproj|ggml-vocab|vocab|projector|qwen3vl|textencoder|sakura-iris|iris-3b/i;
 
 /** Directories we look in for .gguf files. Override/extend with CHAKOR_MODELS_DIR. */
 function modelDirs(currentModelPath: string | null): string[] {
   const home = os.homedir();
   const dirs = new Set<string>();
   if (currentModelPath) dirs.add(path.dirname(currentModelPath));
+  dirs.add(modelsHome());
   for (const d of (process.env.CHAKOR_MODELS_DIR ?? '').split(path.delimiter)) {
     if (d.trim()) dirs.add(d.trim());
   }
@@ -82,11 +87,14 @@ function modelDirs(currentModelPath: string | null): string[] {
 }
 
 /**
- * Where freshly downloaded models are saved. First CHAKOR_MODELS_DIR entry if
- * set, otherwise ~/models. This is one of the dirs scanLocalModels() already
+ * Where freshly downloaded models are saved. The admin's models-folder choice
+ * (or CHAKOR_MODEL_HOME) wins, then the first CHAKOR_MODELS_DIR entry,
+ * otherwise ~/models. This is one of the dirs scanLocalModels() already
  * scans, so anything downloaded here shows up to switch to right away.
  */
 export function primaryModelsDir(): string {
+  const home = configuredModelsHome();
+  if (home) return home;
   const configured = (process.env.CHAKOR_MODELS_DIR ?? '').split(path.delimiter).map((d) => d.trim()).filter(Boolean);
   return configured[0] ?? path.join(os.homedir(), 'models');
 }
@@ -131,11 +139,15 @@ export async function findMmproj(modelPath: string): Promise<string | null> {
 /** Every switchable GGUF on disk, de-duplicated, biggest first. */
 export async function scanLocalModels(currentModelPath: string | null): Promise<LocalModel[]> {
   const dirs = modelDirs(currentModelPath);
+  const kinds = getModelKinds();
   const seen = new Map<string, LocalModel>();
   for (const dir of dirs) {
     // Depth 2 covers LMStudio's publisher/repo/model.gguf layout and similar.
     for (const file of await ggufFilesIn(dir, 2)) {
       if (seen.has(file)) continue;
+      // Files the admin tagged as image/encoder infrastructure are never chat models.
+      const tagged = kinds[path.basename(file)];
+      if (tagged === 'image' || tagged === 'encoder') continue;
       let size = 0;
       try { size = (await fs.stat(file)).size; } catch { continue; }
       const name = path.basename(file);

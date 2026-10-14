@@ -24,7 +24,9 @@ import {
   resolveEncoderPath,
   setActiveEncoder,
   sanitizeGgufName,
-  sdDir,
+  setModelKind,
+  modelsHome,
+  guessModelKind,
 } from '@/lib/sd-server';
 
 export const runtime = 'nodejs';
@@ -42,10 +44,29 @@ async function requireAdmin(): Promise<{ error: NextResponse } | null> {
 async function payload() {
   const [models, active] = await Promise.all([listImageModels(), getActiveImageModel()]);
   const activeEncoder = path.basename(resolveEncoderPath());
+  const dir = modelsHome();
   return {
+    dir,
     models: models.map((m) => ({ name: m.name, sizeBytes: m.size, active: m.name === active })),
     encoders: listEncoders().map((e) => ({ name: e.name, sizeBytes: e.size, active: e.name === activeEncoder })),
+    chat: await listChatFiles(dir),
   };
+}
+
+/** Chat-tagged GGUFs in the shared folder (informational — switching stays in Settings → Models). */
+async function listChatFiles(dir: string): Promise<{ name: string; sizeBytes: number }[]> {
+  try {
+    const out: { name: string; sizeBytes: number }[] = [];
+    for (const f of await fs.readdir(dir)) {
+      if (!f.toLowerCase().endsWith('.gguf') || f.endsWith('.part')) continue;
+      if (guessModelKind(f) !== 'chat') continue;
+      const st = await fs.stat(path.join(dir, f));
+      if (st.isFile()) out.push({ name: f, sizeBytes: st.size });
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name));
+  } catch {
+    return [];
+  }
 }
 
 /** Extract and sanitize whichever selector the body carries: {name} or {encoder}. */
@@ -101,7 +122,8 @@ export async function DELETE(req: NextRequest) {
     if (!listEncoders().some((e) => e.name === sel.name)) {
       return NextResponse.json({ error: 'encoder not found' }, { status: 404 });
     }
-    await fs.unlink(path.join(sdDir(), 'models', sel.name));
+    await fs.unlink(path.join(modelsHome(), sel.name));
+    setModelKind(sel.name, null);
     return NextResponse.json(await payload());
   }
 
@@ -114,5 +136,6 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: 'model not found' }, { status: 404 });
   }
   await fs.unlink(imageModelPath(sel.name));
+  setModelKind(sel.name, null);
   return NextResponse.json(await payload());
 }

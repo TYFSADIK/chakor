@@ -31,6 +31,65 @@ export function sdDir(): string {
 /** GGUFs that are text encoders, not diffusion models (they share one dir). */
 export const ENCODER_RE = /qwen3vl|mmproj|encoder/i;
 
+/** GGUFs that are pixel-space diffusion models, not chat models. */
+export const DIFFUSION_RE = /sakura-iris|iris-3b|flux|stable-diffusion|\bsd[-_]?xl|diffusion/i;
+
+/** The admin/env-configured models folder, or null when unset. */
+export function configuredModelsHome(): string | null {
+  const saved = getSetting('models_home');
+  if (saved && path.isAbsolute(saved)) return saved;
+  const env = process.env.CHAKOR_MODEL_HOME;
+  if (env && path.isAbsolute(env)) return env;
+  return null;
+}
+
+/**
+ * The one folder every GGUF lives in — chat models, diffusion models, and
+ * text encoders together. Order: the admin's panel choice (app_settings), then
+ * CHAKOR_MODEL_HOME, then the legacy default <SDCPP_DIR>/models. Chat model
+ * scanning (lib/local-llama.ts) always includes this folder.
+ */
+export function modelsHome(): string {
+  return configuredModelsHome() ?? path.join(sdDir(), 'models');
+}
+
+/** Persist the admin's models-folder choice (callers validate first). */
+export function setModelsHome(dir: string): void {
+  setSetting('models_home', dir);
+}
+
+export type ModelKind = 'chat' | 'image' | 'encoder';
+
+/** Best-effort kind guess from a file name; chat when nothing matches. */
+export function guessModelKind(name: string): ModelKind {
+  if (ENCODER_RE.test(name)) return 'encoder';
+  if (DIFFUSION_RE.test(name)) return 'image';
+  return 'chat';
+}
+
+/** Stored kind overrides: { "<file>.gguf": "chat" | "image" | "encoder" }. */
+export function getModelKinds(): Record<string, ModelKind> {
+  try {
+    const raw = getSetting('model_kinds');
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, ModelKind> = {};
+    for (const [k, v] of Object.entries(parsed)) {
+      if (v === 'chat' || v === 'image' || v === 'encoder') out[k] = v;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+export function setModelKind(name: string, kind: ModelKind | null): void {
+  const kinds = getModelKinds();
+  if (kind === null) delete kinds[name];
+  else kinds[name] = kind;
+  setSetting('model_kinds', JSON.stringify(kinds));
+}
+
 /** Basename-only .gguf names; anything else (traversal, separators) is null. */
 export function sanitizeGgufName(name: string): string | null {
   if (typeof name !== 'string') return null;
@@ -41,13 +100,16 @@ export function sanitizeGgufName(name: string): string | null {
 
 export interface EncoderFile { name: string; size: number }
 
-/** Text-encoder GGUFs in the models dir (Qwen3-VL, mmproj, …). */
+/** Text-encoder GGUFs in the models folder (Qwen3-VL, mmproj, …). */
 export function listEncoders(): EncoderFile[] {
-  const dir = path.join(sdDir(), 'models');
+  const dir = modelsHome();
+  const kinds = getModelKinds();
   try {
     const out: EncoderFile[] = [];
     for (const f of fs.readdirSync(dir)) {
-      if (!f.toLowerCase().endsWith('.gguf') || f.endsWith('.part') || !ENCODER_RE.test(f)) continue;
+      if (!f.toLowerCase().endsWith('.gguf') || f.endsWith('.part')) continue;
+      const tagged = kinds[f];
+      if (tagged ? tagged !== 'encoder' : !ENCODER_RE.test(f)) continue;
       const st = fs.statSync(path.join(dir, f));
       if (st.isFile()) out.push({ name: f, size: st.size });
     }
@@ -65,7 +127,7 @@ export function listEncoders(): EncoderFile[] {
  */
 export function sdEncoderPath(): string {
   if (process.env.SDCPP_ENCODER) return process.env.SDCPP_ENCODER;
-  const dir = path.join(sdDir(), 'models');
+  const dir = modelsHome();
   let files: string[] = [];
   try {
     files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.gguf') && !f.endsWith('.part'));
@@ -89,7 +151,7 @@ export function resolveEncoderPath(): string {
   if (saved) {
     const clean = sanitizeGgufName(saved);
     if (clean) {
-      const p = path.join(sdDir(), 'models', clean);
+      const p = path.join(modelsHome(), clean);
       if (fs.existsSync(p)) return p;
     }
   }

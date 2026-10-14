@@ -91,7 +91,7 @@ Deep Research is a pipeline, not a single search. It plans four angles, searches
 
 ### Image generation on your own GPU
 
-Chakor runs stable-diffusion.cpp's `sd-server` for you (no separate service to start): the composer grows a Create image pill, you type a prompt (or just say "draw a fox"), and the picture appears in the chat, saved into the conversation's workspace and downloadable from there. While it renders you watch it happen: the chat shows a live in-progress preview frame that sharpens with every sampling step, a step progress bar, and a live elapsed/estimated-remaining timer (`SDCPP_PREVIEW=none` turns the preview off). The default model is an Iris-architecture GGUF (Sakura-Iris-3B) with a Qwen3-VL text encoder — ComfyUI can't run this architecture, which is why Chakor talks to `sd-server` directly. Admins pick who gets access, choose between installed GGUF models, pick a quality preset (fast 512², balanced 768², quality 1024²), and regular users get a sane daily limit (admins run the hardware, so they're never capped). On small cards the engine runs in *swap* mode — the chat model pauses while an image renders (honestly: minutes, not seconds — a full-quality render is ~30 min on a 4 GB card, and you can close the tab while it works), then comes back; with 12+ GB VRAM both stay resident in *parallel* mode.
+Chakor runs stable-diffusion.cpp's `sd-server` for you (no separate service to start): the composer grows a Create image pill, you type a prompt (or just say "draw a fox"), and the picture appears in the chat, saved into the conversation's workspace and downloadable from there. While it renders you watch it happen: the chat shows a live in-progress preview frame that sharpens with every sampling step, a step progress bar, and a live elapsed/estimated-remaining timer (`SDCPP_PREVIEW=none` turns the preview off). The default model is an Iris-architecture GGUF (Sakura-Iris-3B) with a Qwen3-VL text encoder — ComfyUI can't run this architecture, which is why Chakor talks to `sd-server` directly. Admins pick who gets access, choose between installed GGUF models and text encoders, upload new ones straight from the browser (all models — chat, image, encoder — share one folder), pick a quality preset (fast 512², balanced 768², quality 1024²), and regular users get a sane daily limit (admins run the hardware, so they're never capped). On small cards the engine runs in *swap* mode — the chat model pauses while an image renders (honestly: minutes, not seconds — a full-quality render is ~30 min on a 4 GB card, and you can close the tab while it works), then comes back; with 12+ GB VRAM both stay resident in *parallel* mode.
 
 ![An image Chakor generated: misty mountain lake at sunrise](docs/image-gen.png)
 
@@ -200,7 +200,7 @@ git clone https://github.com/TYFSADIK/chakor.git && cd chakor
 bash install.sh
 ```
 
-Want the works, including a local llama.cpp build with NVIDIA CUDA when your machine has it:
+Want the works — a local llama.cpp build with NVIDIA CUDA, GPU image generation (sd-server plus the Sakura-Iris-3B model and its text encoder, downloaded for you), and a local SearXNG for web search:
 
 ```bash
 bash install.sh --all
@@ -218,9 +218,11 @@ On **Android**, install [Termux](https://termux.dev), then run the same `bash in
 
 | Flag | What it does |
 | --- | --- |
-| `--all` | Everything: core tools, Ollama, and build llama.cpp (CUDA auto-detected). |
+| `--all` | Everything: core tools, Ollama, llama.cpp, image generation, and SearXNG. |
 | `--with-llama-cpp` | Also build a local `llama-server` from source. |
 | `--with-cuda` | Build llama.cpp with NVIDIA CUDA (implies `--with-llama-cpp`). |
+| `--with-images` | Build stable-diffusion.cpp's `sd-server` and download the default image model + text encoder (~6 GB). |
+| `--with-searxng` | Run a local SearXNG container for web search (needs Docker; without it search falls back to DuckDuckGo). |
 | `--service` | Install and start a systemd service so it runs 24/7 (needs root or sudo). |
 | `--no-ollama` | Skip Ollama. Bring your own engine or a cloud key. |
 | `--minimal` | Just Node and the app. |
@@ -238,7 +240,7 @@ A few honest notes. The installer never writes permanent passwordless-sudo rules
 
 ### Option 3: setup.sh (already have Node 20+)
 
-The middle path: no system packages installed, just the app. It installs npm dependencies, creates the Python virtualenv the Agent Workspace uses, generates your `AUTH_SECRET`, initializes the database, and builds.
+The middle path: no system packages installed, just the app. It installs npm dependencies, creates the Python virtualenv the Agent Workspace uses, generates your `AUTH_SECRET`, initializes the database, builds, and finishes by running the doctor — a full environment checkup that reports what is ready and what is missing. You can re-run that checkup any time with `npm run doctor`.
 
 ```bash
 git clone https://github.com/TYFSADIK/chakor.git && cd chakor
@@ -311,10 +313,11 @@ Everything lives in `.env.local`. The ones you will actually touch:
 | `LMSTUDIO_BASE_URL` | Where LM Studio's server runs. Default `http://127.0.0.1:1234/v1`. Loaded models appear automatically. |
 | `LLAMA_SERVER_BIN`, `LLAMA_GGUF` | llama.cpp binary plus the default model Chakor runs for you. Switch both live in Settings → Models. |
 | `LLAMA_HOST` | Interface the supervised llama-server binds to. Now defaults to `127.0.0.1`: llama-server has no auth of its own, so it stays loopback-only. Set `0.0.0.0` only if you deliberately want the raw model reachable from your LAN. |
-| `CHAKOR_MODELS_DIR`, `CHAKOR_SUPERVISE_LLAMA` | Extra folders to scan for `.gguf` files. Set supervise to `false` to run llama-server yourself. |
+| `CHAKOR_MODEL_HOME` | One shared folder for every GGUF — chat, image, and encoder models. The admin can set and upload into it from the panel (Admin → Image Generation); blank falls back to `<SDCPP_DIR>/models` for the image pipeline. |
+| `CHAKOR_MODELS_DIR`, `CHAKOR_SUPERVISE_LLAMA` | Extra folders to scan for chat `.gguf` files. Set supervise to `false` to run llama-server yourself. |
 | `CHAKOR_LLAMA_MAX_CRASHES` | How many fast crashes before Chakor stops relaunching a too-big model and tells you to pick a smaller one. Default 4. |
 | `HF_TOKEN` | Optional Hugging Face token for the in-app downloader. Lifts rate limits and reaches gated repos. Public models need none. |
-| `SDCPP_URL`, `SDCPP_DIR`, `SDCPP_ENCODER` | Image generation backend. Chakor spawns stable-diffusion.cpp's `sd-server` on demand from `<SDCPP_DIR>/build/bin` (default `~/stable-diffusion.cpp`); diffusion-model GGUFs live in `<SDCPP_DIR>/models`. `SDCPP_ENCODER` points at the Qwen3-VL text encoder — leave it blank and the admin picks one under Admin → Image Generation (or Chakor auto-discovers one from the models folder). Enable per user under Admin → Image Generation, where you also pick the quality preset (fast / balanced / quality). `IMAGE_ENGINE_MODE` (`auto`/`swap`/`parallel`) controls whether the chat model pauses while an image renders. |
+| `SDCPP_URL`, `SDCPP_DIR`, `SDCPP_ENCODER` | Image generation backend. Chakor spawns stable-diffusion.cpp's `sd-server` on demand from `<SDCPP_DIR>/build/bin` (default `~/stable-diffusion.cpp`); model GGUFs live in the shared models folder (`CHAKOR_MODEL_HOME`, or `<SDCPP_DIR>/models` by default). `SDCPP_ENCODER` points at the Qwen3-VL text encoder — leave it blank and the admin picks one under Admin → Image Generation (or Chakor auto-discovers one). Enable per user under Admin → Image Generation, where you also upload models, pick the quality preset (fast / balanced / quality), and set the models folder. `IMAGE_ENGINE_MODE` (`auto`/`swap`/`parallel`) controls whether the chat model pauses while an image renders. |
 | `IMAGE_DAILY_LIMIT`, `IMAGE_JOB_TIMEOUT_MINUTES` | Image-generation guardrails. Per-user daily render cap (default 10 — each render monopolizes the GPU, so keep one on public sites; admins are never limited), and the hard cap on one render job in minutes (default 45 — a 1024px/30-step image takes ~30 min on a 4 GB card). |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_AI_API_KEY` | Turn on cloud models. |
 | `OPENROUTER_API_KEY`, `OPENROUTER_MODELS` | One key, many models. List them as `id\|Label`, comma separated. |
@@ -420,12 +423,14 @@ Already had the old two service setup (a separate llama server)? Run `scripts/us
 
 | Problem | Fix |
 | --- | --- |
+| Not sure what is wrong | Run `npm run doctor` — it checks every piece Chakor uses and prints the fix for whatever is missing. |
 | Installer stopped partway | Just run `bash install.sh` again. It is safe to re-run and skips what is already done. The full log is in `install.log`. |
 | `npm install` fails on peer deps | Use `npm install --legacy-peer-deps`. |
 | Chat says it cannot connect | Is Ollama, LM Studio, or llama.cpp running, or did you set a cloud key. The model menu and Settings → Models both show which engines are up. |
 | Local model keeps crashing | It is probably too big for your machine. Settings → Models marks it TOO BIG and suggests one that fits, or switch to Ollama or LM Studio from the model menu. |
 | No models in the picker | Pull a model with `ollama pull`, load one in LM Studio, or add an API key, then reload. |
 | Search finds nothing | Turn on `json` format in SearXNG, or set `BRAVE_SEARCH_API_KEY`. |
+| Image generation unavailable | Run `bash install.sh --with-images` — it builds `sd-server` and downloads the model + text encoder. Then enable it per user under Admin → Image Generation. |
 | Cannot sign in after first run | First account registered is the admin. Check `REGISTRATION_MODE` and `INVITE_CODE`. |
 
 ## What's next

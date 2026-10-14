@@ -108,6 +108,7 @@ const { POST: cancelPOST } = await import('@/app/api/images/cancel/route');
 const { POST: chatPOST } = await import('@/app/api/chat/route');
 const { GET: adminGET, PUT: adminPUT } = await import('@/app/api/admin/images/route');
 const imagemodels = await import('@/app/api/admin/imagemodels/route');
+const { POST: uploadPOST } = await import('@/app/api/admin/models/upload/route');
 
 afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }));
 afterEach(() => vi.unstubAllGlobals());
@@ -589,6 +590,71 @@ describe('admin imagemodels route', () => {
     expect(sd.resolveEncoderPath()).toBe(path.join(sdTmp, 'models', ENC_INSTRUCT));
     // Restore the panel choice for the flow test below.
     dbm.setSetting('image_encoder', ENC_INSTRUCT);
+  });
+});
+
+describe('admin model upload + shared folder', () => {
+  const upload = (name: string, body = 'fake-gguf-bytes', kind = '') =>
+    uploadPOST({
+      url: `http://test/api/admin/models/upload?name=${encodeURIComponent(name)}${kind ? `&kind=${kind}` : ''}`,
+      body: new ReadableStream({ start(c) { c.enqueue(Buffer.from(body)); c.close(); } }),
+    } as unknown as NextRequest);
+
+  it('rejects non-admins with 403', async () => {
+    mockAuth.session = MEMBER;
+    expect((await upload('member-upload.gguf')).status).toBe(403);
+  });
+
+  it('streams an upload to disk, tags its kind, and lists it', async () => {
+    mockAuth.session = ADMIN;
+    expect((await upload('../evil.gguf')).status).toBe(400);
+
+    const r = await upload('uploaded-image.gguf', 'img-bytes', 'image');
+    expect(r.status).toBe(200);
+    const d = await r.json();
+    expect(d).toMatchObject({ ok: true, name: 'uploaded-image.gguf', kind: 'image', dir: path.join(sdTmp, 'models') });
+    expect(fs.readFileSync(path.join(sdTmp, 'models', 'uploaded-image.gguf'), 'utf8')).toBe('img-bytes');
+    expect(fs.existsSync(path.join(sdTmp, 'models', 'uploaded-image.gguf.part'))).toBe(false);
+
+    const models = await imggen.listImageModels();
+    expect(models.map((m) => m.name)).toContain('uploaded-image.gguf');
+    // Duplicate name is refused.
+    expect((await upload('uploaded-image.gguf', 'again', 'image')).status).toBe(409);
+  });
+
+  it('auto-guesses kinds and keeps chat models out of the image list', async () => {
+    mockAuth.session = ADMIN;
+    expect((await upload('uploaded-encoder-qwen3vl.gguf', 'enc')).status).toBe(200); // auto → encoder
+    expect((await upload('uploaded-chat.gguf', 'chat', 'chat')).status).toBe(200);
+
+    const d = await (await imagemodels.GET()).json();
+    const encNames = d.encoders.map((e: { name: string }) => e.name);
+    const imgNames = d.models.map((m: { name: string }) => m.name);
+    const chatNames = d.chat.map((m: { name: string }) => m.name);
+    expect(encNames).toContain('uploaded-encoder-qwen3vl.gguf');
+    expect(imgNames).toContain('uploaded-image.gguf');
+    expect(imgNames).not.toContain('uploaded-chat.gguf');
+    expect(imgNames).not.toContain('uploaded-encoder-qwen3vl.gguf');
+    expect(chatNames).toContain('uploaded-chat.gguf');
+  });
+
+  it('honors the admin-set models folder (modelsHome)', async () => {
+    mockAuth.session = ADMIN;
+    const alt = path.join(tmp, 'unified-models');
+    fs.mkdirSync(alt, { recursive: true });
+    fs.writeFileSync(path.join(alt, 'alt-image.gguf'), Buffer.alloc(8));
+    const r = await adminPUT(req({ modelsHome: alt }));
+    expect(r.status).toBe(200);
+    expect(sd.modelsHome()).toBe(alt);
+    const models = await imggen.listImageModels();
+    expect(models.map((m) => m.name)).toEqual(['alt-image.gguf']);
+    dbm.setSetting('models_home', ''); // restore: fall back to SDCPP_DIR/models
+    expect(sd.modelsHome()).toBe(path.join(sdTmp, 'models'));
+  });
+
+  it('rejects a bad models folder path', async () => {
+    mockAuth.session = ADMIN;
+    expect((await adminPUT(req({ modelsHome: 'relative/path' }))).status).toBe(400);
   });
 });
 

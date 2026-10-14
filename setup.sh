@@ -78,6 +78,10 @@ npm run init-db
 bold "→ Building…"
 npm run build
 
+# 7. Verify the whole environment (non-fatal — it only reports)
+bold "→ Running the environment checkup…"
+node scripts/doctor.mjs || true
+
 bold "✓ Done."
 echo "Start the app with:  npm start"
 echo "Then open:           http://localhost:3001"

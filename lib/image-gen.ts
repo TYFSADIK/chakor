@@ -23,7 +23,7 @@ import type { Hardware } from './hardware';
 import { chatInflightCount, ensureLlamaActive, setImageSwapActive } from './backends';
 import { llamaSupervisor } from './llama-supervisor';
 import { sdSupervisor } from './sd-supervisor';
-import { sdDir, ImageGenError, ENCODER_RE, sanitizeGgufName } from './sd-server';
+import { ImageGenError, ENCODER_RE, sanitizeGgufName, modelsHome, getModelKinds } from './sd-server';
 import { logger, errText } from './logger';
 
 export { ImageGenError };
@@ -145,7 +145,7 @@ export function estimateImageSeconds(mode: ImageMode, q: ImageQuality): number {
   return table[mode][q];
 }
 
-// ─── Image model management (GGUF files in <sdDir>/models) ───────
+// ─── Image model management (GGUF files in the shared models folder) ───
 // Preference order when no admin choice is saved: Q8_0 is measurably clean,
 // Q4_K_M is the smaller/faster but visibly lossy fallback.
 export const DEFAULT_IMAGE_MODELS = [
@@ -155,17 +155,24 @@ export const DEFAULT_IMAGE_MODELS = [
 
 /** Diffusion models and the Qwen3-VL text encoder share one directory. */
 export function imageModelsDir(): string {
-  return path.join(sdDir(), 'models');
+  return modelsHome();
 }
 
 export interface ImageModelFile { name: string; size: number }
 
-/** Diffusion-model GGUFs only — the text encoder is infrastructure, never a choice. */
+/**
+ * Diffusion-model GGUFs only. A file tagged chat/encoder via the admin
+ * upload is never listed; untagged files keep the legacy heuristic (anything
+ * not encoder-shaped counts) so pre-tagging installs are unaffected.
+ */
 export async function listImageModels(): Promise<ImageModelFile[]> {
   try {
+    const kinds = getModelKinds();
     const out: ImageModelFile[] = [];
     for (const f of await fs.readdir(imageModelsDir())) {
-      if (!f.toLowerCase().endsWith('.gguf') || f.endsWith('.part') || ENCODER_RE.test(f)) continue;
+      if (!f.toLowerCase().endsWith('.gguf') || f.endsWith('.part')) continue;
+      const tagged = kinds[f];
+      if (tagged ? tagged !== 'image' : ENCODER_RE.test(f)) continue;
       const st = await fs.stat(path.join(imageModelsDir(), f));
       if (st.isFile()) out.push({ name: f, size: st.size });
     }

@@ -5,6 +5,7 @@
  * PUT /api/admin/images — { enabled?, allowlist? } updates the settings.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { requireUser, isAdminSession } from '@/lib/guard';
 import { setSetting, getUserById } from '@/lib/db';
@@ -18,7 +19,7 @@ import {
   isImageQuality,
   estimateImageSeconds,
 } from '@/lib/image-gen';
-import { sdCapabilities, listEncoders, resolveEncoderPath } from '@/lib/sd-server';
+import { sdCapabilities, listEncoders, resolveEncoderPath, setModelsHome } from '@/lib/sd-server';
 import { detectHardware } from '@/lib/hardware';
 
 export const runtime = 'nodejs';
@@ -71,12 +72,24 @@ export async function PUT(req: NextRequest) {
   if (!body || typeof body !== 'object') {
     return NextResponse.json({ error: 'invalid body' }, { status: 400 });
   }
-  const unknown = Object.keys(body).filter((k) => k !== 'enabled' && k !== 'allowlist' && k !== 'quality');
+  const unknown = Object.keys(body).filter((k) => k !== 'enabled' && k !== 'allowlist' && k !== 'quality' && k !== 'modelsHome');
   if (unknown.length) {
     return NextResponse.json({ error: `unknown setting: ${unknown.join(', ')}` }, { status: 400 });
   }
 
-  const b = body as { enabled?: unknown; allowlist?: unknown; quality?: unknown };
+  const b = body as { enabled?: unknown; allowlist?: unknown; quality?: unknown; modelsHome?: unknown };
+  if (b.modelsHome !== undefined) {
+    if (typeof b.modelsHome !== 'string' || !path.isAbsolute(b.modelsHome.trim())) {
+      return NextResponse.json({ error: 'modelsHome must be an absolute path' }, { status: 400 });
+    }
+    const dir = b.modelsHome.trim();
+    try {
+      await fs.mkdir(dir, { recursive: true });
+    } catch {
+      return NextResponse.json({ error: `cannot create ${dir}` }, { status: 400 });
+    }
+    setModelsHome(dir);
+  }
   if (b.enabled !== undefined) {
     if (typeof b.enabled !== 'boolean') {
       return NextResponse.json({ error: 'enabled must be a boolean' }, { status: 400 });
@@ -98,5 +111,5 @@ export async function PUT(req: NextRequest) {
     setSetting('image_quality', b.quality);
   }
 
-  return NextResponse.json({ ...readImageGenSettings(), quality: imageQuality() });
+  return NextResponse.json({ ...readImageGenSettings(), quality: imageQuality(), modelsHome: imageModelsDir() });
 }

@@ -120,10 +120,14 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
   type ImgQuality = 'fast' | 'balanced' | 'quality';
   type ImgSettings = { enabled: boolean; allowlist: number[]; engine: string; online: boolean;
     mode: 'swap' | 'parallel'; quality: ImgQuality; etaSeconds: number; modelsDir: string; activeModel: string | null; models: ImgModel[];
-    activeEncoder: string | null; encoders: ImgModel[] };
+    activeEncoder: string | null; encoders: ImgModel[]; chat?: ImgModel[]; dir?: string };
   const [img, setImg] = useState<ImgSettings | null>(null);
   const [imgUsers, setImgUsers] = useState<User[]>([]);
   const [savingImg, setSavingImg] = useState(false);
+  const [uploadProg, setUploadProg] = useState<number | null>(null);
+  const [uploadName, setUploadName] = useState('');
+  const [uploadKind, setUploadKind] = useState<'auto' | 'chat' | 'image' | 'encoder'>('auto');
+  const [dirEdit, setDirEdit] = useState<string | null>(null);
   const resetTrapRef = useFocusTrap<HTMLDivElement>(!!resetModal, () => setResetModal(null));
   const confirmTrapRef = useFocusTrap<HTMLDivElement>(!!confirm, () => { if (!acting) setConfirm(null); });
 
@@ -139,18 +143,31 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
   const loadSystem = useCallback(async()=>{ try{const r=await fetch('/api/admin/system');if(r.ok)setSystem(await r.json());}catch{} }, []);
   const loadSettings = useCallback(async()=>{ try{const r=await fetch('/api/admin/settings');if(r.ok){const d=await r.json();setInstr(d.customInstructions??'');setRespStyle(d.responseStyle==='concise'||d.responseStyle==='detailed'?d.responseStyle:'balanced');} setInstrLoaded(true);}catch{setInstrLoaded(true);} }, []);
   const loadImg = useCallback(async()=>{ try{const r=await fetch('/api/admin/images');if(r.ok)setImg(await r.json());}catch{} },[]);
+  // Merge the model/encoder/chat lists (and the folder) from the imagemodels route.
+  const loadImgModels = useCallback(async()=>{
+    try{
+      const r=await fetch('/api/admin/imagemodels');if(!r.ok)return;
+      const d=await r.json();
+      const models=(d?.models??[]) as ImgModel[];
+      const encoders=(d?.encoders??[]) as ImgModel[];
+      const chat=(d?.chat??[]) as ImgModel[];
+      setImg(p=>p?{...p,models,activeModel:models.find(m=>m.active)?.name??null,encoders,activeEncoder:encoders.find(e=>e.active)?.name??null,chat,modelsDir:d?.dir??p.modelsDir}:p);
+    }catch{}
+  },[]);
   // The allowlist picker needs the user list even on the dashboard tab.
   const loadImgUsers = useCallback(async()=>{ try{const r=await fetch('/api/admin/users');if(r.ok)setImgUsers(await r.json());}catch{} },[]);
 
-  async function saveImg(patch: { enabled?: boolean; allowlist?: number[]; quality?: ImgQuality }) {
+  async function saveImg(patch: { enabled?: boolean; allowlist?: number[]; quality?: ImgQuality; modelsHome?: string }) {
     if(savingImg)return;
     setSavingImg(true);
     try{
       const r=await fetch('/api/admin/images',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)});
       const d=await r.json().catch(()=>null);
       if(!r.ok){notify(d?.error??'Failed to save image settings',false);return;}
-      setImg(p=>p?{...p,enabled:d.enabled,allowlist:d.allowlist,quality:d.quality??p.quality}:p);
+      setImg(p=>p?{...p,enabled:d.enabled,allowlist:d.allowlist,quality:d.quality??p.quality,modelsDir:d.modelsHome??p.modelsDir}:p);
+      setDirEdit(null);
       notify('Image generation settings saved');
+      loadImgModels();
     }catch{notify('Network error, please try again',false);}
     finally{setSavingImg(false);}
   }
@@ -162,11 +179,29 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
       if(!r.ok){notify(d?.error??'Model action failed',false);return;}
       const models=(d?.models??[]) as ImgModel[];
       const encoders=(d?.encoders??[]) as ImgModel[];
-      setImg(p=>p?{...p,models,activeModel:models.find(m=>m.active)?.name??null,encoders,activeEncoder:encoders.find(e=>e.active)?.name??null}:p);
+      const chat=(d?.chat??[]) as ImgModel[];
+      setImg(p=>p?{...p,models,activeModel:models.find(m=>m.active)?.name??null,encoders,activeEncoder:encoders.find(e=>e.active)?.name??null,chat}:p);
       notify(method==='POST'
         ? (kind==='encoder'?'Active text encoder updated (applies to the next render)':'Active image model updated')
         : (kind==='encoder'?'Encoder deleted':'Model deleted'));
     }catch{notify('Network error, please try again',false);}
+  }
+
+  // Raw-body upload with XHR so multi-GB GGUFs get a real progress bar.
+  function uploadModel(file: File) {
+    const q=new URLSearchParams({name:file.name});
+    if(uploadKind!=='auto')q.set('kind',uploadKind);
+    const xhr=new XMLHttpRequest();
+    xhr.open('POST',`/api/admin/models/upload?${q}`);
+    setUploadName(file.name);setUploadProg(0);
+    xhr.upload.onprogress=(e)=>{if(e.lengthComputable)setUploadProg(e.loaded/e.total);};
+    xhr.onload=()=>{
+      setUploadProg(null);setUploadName('');
+      if(xhr.status>=200&&xhr.status<300){notify('Model uploaded');loadImgModels();}
+      else{let msg='Upload failed';try{msg=JSON.parse(xhr.responseText)?.error??msg;}catch{}notify(msg,false);}
+    };
+    xhr.onerror=()=>{setUploadProg(null);setUploadName('');notify('Upload failed — network error',false);};
+    xhr.send(file);
   }
 
   async function saveInstr() {
@@ -182,7 +217,7 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
     finally{setSavingInstr(false);}
   }
 
-  useEffect(()=>{ if(tab==='dashboard'){loadStats();loadSystem();loadSettings();loadImg();loadImgUsers();}else loadUsers(); },[tab,loadStats,loadUsers,loadSystem,loadSettings,loadImg,loadImgUsers]);
+  useEffect(()=>{ if(tab==='dashboard'){loadStats();loadSystem();loadSettings();loadImg();loadImgModels();loadImgUsers();}else loadUsers(); },[tab,loadStats,loadUsers,loadSystem,loadSettings,loadImg,loadImgModels,loadImgUsers]);
   useEffect(()=>{ if(timer.current) clearInterval(timer.current); timer.current=setInterval(()=>{if(tab==='dashboard'){loadStats();loadSystem();}},30000); return()=>{if(timer.current)clearInterval(timer.current);}; },[tab,loadStats,loadSystem]);
   useEffect(()=>{ const mq=window.matchMedia('(max-width: 900px)'); const f=()=>setNarrow(mq.matches); f(); mq.addEventListener('change',f); return()=>mq.removeEventListener('change',f); },[]);
 
@@ -400,7 +435,45 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
                   </div>
 
                   <div>
-                    <p className="byline" style={{marginBottom:8}}>Models ({img.modelsDir})</p>
+                    <p className="byline" style={{marginBottom:8}}>Models folder (chat, image and encoder GGUFs live together here)</p>
+                    {dirEdit===null
+                      ? <div style={{display:'flex',alignItems:'center',gap:10}}>
+                          <span style={{flex:1,color:'var(--fg-2)',fontFamily:TYPE,fontSize:11.5,wordBreak:'break-all'}}>{img.modelsDir}</span>
+                          <button onClick={()=>setDirEdit(img.modelsDir)} className="btn btn-outline" style={{fontSize:11,padding:'5px 12px'}}>Change</button>
+                        </div>
+                      : <div style={{display:'flex',alignItems:'center',gap:8}}>
+                          <input value={dirEdit} onChange={e=>setDirEdit(e.target.value)} placeholder="/absolute/path/to/models"
+                            style={{flex:1,fontSize:12,padding:'6px 10px',fontFamily:TYPE,background:'transparent',border:'1px solid var(--bd-2)',color:'var(--fg)'}}/>
+                          <button disabled={savingImg} onClick={()=>dirEdit&&saveImg({modelsHome:dirEdit})} className="btn btn-outline" style={{fontSize:11,padding:'5px 12px'}}>Save</button>
+                          <button onClick={()=>setDirEdit(null)} className="btn btn-outline" style={{fontSize:11,padding:'5px 12px'}}>Cancel</button>
+                        </div>}
+                    <p style={{fontSize:11.5,color:'var(--fg-4)',margin:'6px 0 0'}}>Changing the folder does not move files — move them yourself, or upload below into the new folder.</p>
+                  </div>
+
+                  <div>
+                    <p className="byline" style={{marginBottom:8}}>Upload a model</p>
+                    {uploadProg===null
+                      ? <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                          <input type="file" accept=".gguf" style={{fontSize:12,color:'var(--fg-3)',maxWidth:280}}
+                            onChange={e=>{const f=e.target.files?.[0];if(f)uploadModel(f);e.target.value='';}}/>
+                          <select value={uploadKind} onChange={e=>setUploadKind(e.target.value as typeof uploadKind)}
+                            style={{fontSize:12,padding:'5px 8px',background:'transparent',border:'1px solid var(--bd-2)',color:'var(--fg)'}}>
+                            <option value="auto">Auto-detect type</option>
+                            <option value="chat">Chat model</option>
+                            <option value="image">Image model</option>
+                            <option value="encoder">Text encoder</option>
+                          </select>
+                        </div>
+                      : <div>
+                          <div style={{height:6,background:'var(--bd-2)',overflow:'hidden'}}>
+                            <div style={{height:'100%',width:`${Math.round(uploadProg*100)}%`,background:'var(--g-bd)',transition:'width .2s'}}/>
+                          </div>
+                          <p style={{fontSize:11.5,color:'var(--fg-4)',margin:'6px 0 0'}}>Uploading {uploadName} — {Math.round(uploadProg*100)}%. Keep this tab open.</p>
+                        </div>}
+                  </div>
+
+                  <div>
+                    <p className="byline" style={{marginBottom:8}}>Image models</p>
                     {img.models.length>0
                       ? <div style={{display:'flex',flexDirection:'column',gap:8}}>
                           {img.models.map(m=>(
@@ -436,6 +509,19 @@ export default function AdminPanel({ selfId }: { selfId: number }) {
                         </div>
                       : <p style={{fontSize:12.5,color:'var(--fg-4)',margin:0}}>No text encoder found. Drop a Qwen3-VL encoder .gguf into the models folder, then refresh.</p>}
                   </div>
+                  {(img.chat??[]).length>0&&(
+                    <div>
+                      <p className="byline" style={{marginBottom:8}}>Chat models in this folder</p>
+                      <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                        {img.chat!.map(m=>(
+                          <div key={m.name} style={{display:'flex',alignItems:'center',gap:10,fontSize:12.5}}>
+                            <span style={{flex:1,color:'var(--fg-2)',fontFamily:TYPE,fontSize:11.5,wordBreak:'break-all'}}>{m.name} <span style={{color:'var(--fg-4)'}}>({(m.sizeBytes/1e9).toFixed(1)} GB)</span></span>
+                          </div>
+                        ))}
+                        <p style={{fontSize:11.5,color:'var(--fg-4)',margin:'4px 0 0'}}>Switch the running chat model from Settings → Models.</p>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
